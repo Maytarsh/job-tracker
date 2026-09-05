@@ -151,6 +151,17 @@ Everything lives in `src/Config.gs`:
 The prefilter is deliberately over-inclusive: a missed confirmation is a lost row,
 while a false positive costs a fraction of a cent at triage.
 
+`Config.gs` is the one file that holds *your* settings rather than just code, so
+re-pasting it reverts everything above to the defaults — `DRY_RUN` back to `true` most
+notably. Re-check it after any update.
+
+Note that `DRY_RUN` does not make a run free. Triage is called on every candidate email
+either way; the flag only skips the sheet write and the company enrichment that follows
+it. Rehearsing and then running for real pays for triage twice, so it is worth doing
+only when you have changed something that affects classification — the prefilter
+patterns or the triage prompt — and want to see the new output before it reaches
+`Applications`.
+
 ## Cost
 
 Triage is `claude-haiku-4-5` per candidate email; enrichment is `claude-opus-5` with
