@@ -356,3 +356,78 @@ t('a skipped row carries the message ID first', function () {
   eq(SKIPPED_HEADERS[0], 'Message ID');
   eq(SKIPPED_HEADERS.length, 4);
 });
+
+
+// ---------------------------------------------- untrusted input into cells
+// Everything written to the sheet came from an email or a model reading one,
+// so all of it is attacker-influenceable.
+t('formula injection is neutralised', function () {
+  eq(safeCell_('=HYPERLINK("http://evil","click")').charAt(0), "'");
+  eq(safeCell_('+1234').charAt(0), "'");
+  eq(safeCell_('-cmd').charAt(0), "'");
+  eq(safeCell_('@import').charAt(0), "'");
+  eq(safeCell_('Wiz'), 'Wiz', 'ordinary names are untouched');
+});
+
+t('control characters and runaway length are trimmed', function () {
+  var withCtrl = 'Acme' + String.fromCharCode(1) + ' Corp';
+  eq(safeCell_(withCtrl), 'Acme  Corp');
+  var long = safeCell_(new Array(900).join('x'), 100);
+  ok(long.length <= 100, 'capped');
+  eq(long.charAt(long.length - 1), '…', 'marked as truncated');
+});
+
+t('dates and numbers pass through unchanged', function () {
+  var d = new Date(2026, 0, 1);
+  ok(safeCell_(d) === d, 'Date object preserved for the date columns');
+  eq(safeCell_(42), 42);
+  eq(safeCell_(''), '');
+});
+
+t('degenerate model output is recognised', function () {
+  var frag = '<' + '/parameter>' + '<parameter name="website">';
+  ok(looksDegenerate_(frag), 'tool-call scaffolding');
+  ok(looksDegenerate_('<' + 'div>hello<' + '/div>'), 'markup');
+  ok(!looksDegenerate_('Algorio builds scheduling software for clinics.'), 'real prose');
+});
+
+t('a malformed profile is replaced rather than written', function () {
+  var bad = sanitizeProfile_({
+    market: 'Cybersecurity',
+    description: '<' + '/parameter>' + '<parameter name="website">',
+    sub_market: '', website: '', hq_location: '', employee_range: '', founded_year: ''
+  });
+  eq(bad.market, 'Unknown', 'a market is not claimed on unusable output');
+  ok(bad.description.indexOf('re-run from the menu') !== -1, 'actionable placeholder');
+  ok(!looksDegenerate_(bad.description), 'garbage never reaches the cell');
+});
+
+t('an off-vocabulary market falls back to Unknown', function () {
+  var p = sanitizeProfile_({
+    market: 'Cyber Security Solutions',
+    description: 'Algorio builds scheduling software for clinics in Israel.',
+    sub_market: '', website: '', hq_location: '', employee_range: '', founded_year: ''
+  });
+  eq(p.market, 'Unknown', 'keeps the column filterable');
+  ok(p.description.indexOf('Algorio') === 0, 'a good description is kept');
+});
+
+t('a valid profile passes through intact', function () {
+  var p = sanitizeProfile_({
+    market: 'Cybersecurity',
+    description: 'Wiz sells a cloud security platform to enterprise security teams.',
+    sub_market: 'CNAPP', website: 'https://wiz.io',
+    hq_location: 'Tel Aviv', employee_range: '1000-5000', founded_year: '2020'
+  });
+  eq(p.market, 'Cybersecurity');
+  eq(p.sub_market, 'CNAPP');
+  eq(p.website, 'https://wiz.io');
+});
+
+t('a too-short description is treated as a failure', function () {
+  var p = sanitizeProfile_({
+    market: 'Fintech', description: 'n/a',
+    sub_market: '', website: '', hq_location: '', employee_range: '', founded_year: ''
+  });
+  eq(p.market, 'Unknown');
+});

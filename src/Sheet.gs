@@ -13,6 +13,63 @@ var A_COMPANY = 0, A_ROLE = 1, A_MARKET = 2, A_DESC = 3, A_STATUS = 4,
 // Stage ordering, so an out-of-order email can never move a row backwards.
 var STAGE_RANK = { 'Applied': 1, 'Screening': 2, 'Interview': 3, 'Offer': 4 };
 
+/**
+ * Neutralise a value before it reaches a cell.
+ *
+ * Every string we write originates in an email or a model's reading of one, so
+ * it is untrusted. Two concrete hazards:
+ *  - Sheets evaluates a cell beginning = + - @ as a formula, so a crafted
+ *    company name could execute HYPERLINK/IMPORTXML in the sheet. A leading
+ *    apostrophe forces it to stay text.
+ *  - Degenerate model output (markup fragments, runaway length) otherwise
+ *    lands verbatim in a column you read every day.
+ */
+function safeCell_(value, maxLen) {
+  if (value === '' || value === null || value === undefined) return '';
+  if (value instanceof Date || typeof value === 'number') return value;
+
+  var text = String(value).replace(/[\u0000-\u001f\u007f]/g, ' ').trim();
+  if (!text) return '';
+
+  var cap = maxLen || 500;
+  if (text.length > cap) text = text.substring(0, cap - 1) + '…';
+  if (/^[=+\-@\t\r]/.test(text)) text = "'" + text;
+  return text;
+}
+
+/** Markup fragments and tool-call scaffolding leaking out of a bad generation. */
+function looksDegenerate_(text) {
+  if (!text) return false;
+  return /<\/?[a-z_:]+[^>]*>|parameter name=|antml|\bfunction_calls\b/i.test(text);
+}
+
+/**
+ * A schema guarantees the shape of the enrichment result, never the sanity of
+ * its free text. Drop anything that came back malformed rather than writing it.
+ */
+function sanitizeProfile_(profile) {
+  if (!profile) return null;
+
+  var market = String(profile.market || '');
+  if (MARKETS.indexOf(market) === -1) market = 'Unknown';
+
+  var description = String(profile.description || '');
+  if (looksDegenerate_(description) || description.length < 10) {
+    market = 'Unknown';
+    description = 'Enrichment returned unusable output — re-run from the menu.';
+  }
+
+  return {
+    market: market,
+    sub_market: looksDegenerate_(profile.sub_market) ? '' : (profile.sub_market || ''),
+    description: description,
+    website: looksDegenerate_(profile.website) ? '' : (profile.website || ''),
+    hq_location: profile.hq_location || '',
+    employee_range: profile.employee_range || '',
+    founded_year: profile.founded_year || ''
+  };
+}
+
 function getSheet_(name) {
   var sheet = SpreadsheetApp.getActive().getSheetByName(name);
   if (!sheet) throw new Error('Missing tab "' + name + '". Run setup() first.');
@@ -123,7 +180,7 @@ function companyProfile_(book, companyName, hintUrl) {
   var profile;
   try {
     book.enrichCount++;
-    profile = enrichCompany_(companyName, hintUrl);
+    profile = sanitizeProfile_(enrichCompany_(companyName, hintUrl));
   } catch (err) {
     Logger.log('enrich failed for ' + companyName + ': ' + err);
     profile = null;
@@ -137,9 +194,11 @@ function companyProfile_(book, companyName, hintUrl) {
 
   book.companies[key] = profile;
   book.newCompanies.push([
-    key, companyName, profile.market, profile.sub_market, profile.description,
-    profile.website, profile.hq_location, profile.employee_range,
-    profile.founded_year, new Date()
+    key, safeCell_(companyName, 120), safeCell_(profile.market, 40),
+    safeCell_(profile.sub_market, 120), safeCell_(profile.description, 600),
+    safeCell_(profile.website, 200), safeCell_(profile.hq_location, 120),
+    safeCell_(profile.employee_range, 40), safeCell_(profile.founded_year, 10),
+    new Date()
   ]);
   return profile;
 }
@@ -219,17 +278,17 @@ function upsertApplication_(book, triage, msg) {
     row[A_STAGE] = mergeStage_(row[A_STAGE], stage);
     row[A_STATUS] = closed ? 'Closed' : row[A_STATUS];
     row[A_UPDATED] = msg.date;
-    if (!row[A_ROLE] && triage.role) row[A_ROLE] = triage.role;
+    if (!row[A_ROLE] && triage.role) row[A_ROLE] = safeCell_(triage.role, 200);
     if (!row[A_APPLIED] && triage.category === 'application_confirmation') {
       row[A_APPLIED] = msg.date;
     }
-    if (!row[A_JOB_URL] && triage.job_url) row[A_JOB_URL] = triage.job_url;
-    if (!row[A_LOCATION] && triage.location) row[A_LOCATION] = triage.location;
-    if (!row[A_ATS] && triage.source_ats) row[A_ATS] = triage.source_ats;
+    if (!row[A_JOB_URL] && triage.job_url) row[A_JOB_URL] = safeCell_(triage.job_url, 500);
+    if (!row[A_LOCATION] && triage.location) row[A_LOCATION] = safeCell_(triage.location, 120);
+    if (!row[A_ATS] && triage.source_ats) row[A_ATS] = safeCell_(triage.source_ats, 60);
     if (!row[A_MARKET]) {
       var refreshed = companyProfile_(book, triage.company, triage.job_url);
-      row[A_MARKET] = refreshed.market;
-      row[A_DESC] = refreshed.description;
+      row[A_MARKET] = safeCell_(refreshed.market, 40);
+      row[A_DESC] = safeCell_(refreshed.description, 600);
     }
     row[A_EMAIL] = threadUrl_(msg.threadId);
     // A guessed row match is worth auditing even if the extraction was clean.
@@ -242,17 +301,17 @@ function upsertApplication_(book, triage, msg) {
 
   var profile = companyProfile_(book, triage.company, triage.job_url);
   var fresh = new Array(APP_HEADERS.length).fill('');
-  fresh[A_COMPANY] = triage.company;
-  fresh[A_ROLE] = triage.role;
-  fresh[A_MARKET] = profile.market;
-  fresh[A_DESC] = profile.description;
+  fresh[A_COMPANY] = safeCell_(triage.company, 120);
+  fresh[A_ROLE] = safeCell_(triage.role, 200);
+  fresh[A_MARKET] = safeCell_(profile.market, 40);
+  fresh[A_DESC] = safeCell_(profile.description, 600);
   fresh[A_STATUS] = closed ? 'Closed' : 'Open';
   fresh[A_STAGE] = stage;
   fresh[A_APPLIED] = (triage.category === 'application_confirmation') ? msg.date : '';
   fresh[A_UPDATED] = msg.date;
-  fresh[A_ATS] = triage.source_ats;
-  fresh[A_JOB_URL] = triage.job_url;
-  fresh[A_LOCATION] = triage.location;
+  fresh[A_ATS] = safeCell_(triage.source_ats, 60);
+  fresh[A_JOB_URL] = safeCell_(triage.job_url, 500);
+  fresh[A_LOCATION] = safeCell_(triage.location, 120);
   fresh[A_EMAIL] = threadUrl_(msg.threadId);
   fresh[A_CONF] = triage.confidence;
   // findRow_ searches `appended` too, so a second email for the same company

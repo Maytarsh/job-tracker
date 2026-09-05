@@ -188,6 +188,24 @@ built lazily inside functions, and there are regression tests for it. **Keep the
 harness in alphabetical order** — sorting it by dependency would hide the whole class
 of bug.
 
+## Untrusted input
+
+Every value in the Sheet originates in an email, or in a model's reading of one, so all
+of it is treated as attacker-influenceable:
+
+- **Formula injection.** Sheets evaluates a cell starting with `=`, `+`, `-` or `@`, so
+  a crafted company name could run `HYPERLINK`/`IMPORTXML` in your spreadsheet.
+  `safeCell_()` prefixes an apostrophe to force those to stay text, strips control
+  characters, and caps length.
+- **Prompt injection.** The company name and job URL passed to the enrichment call were
+  extracted from an email. They are fenced in markers and the model is told the content
+  is untrusted data to look up, not instructions to follow.
+- **Degenerate output.** `strict: true` guarantees the *shape* of the enrichment result,
+  never the sanity of its free text. `sanitizeProfile_()` rejects descriptions
+  containing markup or tool-call fragments, and falls back to `Unknown` plus an
+  actionable placeholder rather than writing garbage into a column you read daily.
+  An off-vocabulary Market falls back the same way, keeping the column filterable.
+
 ## Limits
 
 Well inside the free Apps Script quotas (20k URL fetches/day, 90 min runtime/day).
