@@ -10,6 +10,7 @@ from selenium import webdriver
 from selenium.webdriver.firefox.options import Options
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SRC = os.path.join(ROOT, "src")
 
 STUBS = """
 var Logger = { log: function () {} };
@@ -28,8 +29,11 @@ var ScriptApp = { getProjectTriggers: function () { return []; } };
 def build_page():
     """Write the harness to a real file - Firefox refuses top-level data: URLs."""
     src = [STUBS]
-    for name in ['Config.gs', 'Gmail.gs', 'Claude.gs', 'Sheet.gs', 'Main.gs']:
-        with open(os.path.join(ROOT, name), encoding='utf-8') as fh:
+    # Alphabetical, because that is the order Apps Script evaluates project
+    # files in - NOT dependency order. Loading them any other way here would
+    # hide load-order bugs that would then only show up in production.
+    for path in sorted(glob.glob(os.path.join(ROOT, 'src', '*.gs'))):
+        with open(path, encoding='utf-8') as fh:
             src.append(fh.read())
     with open(os.path.join(ROOT, 'test', 'logic_tests.js'), encoding='utf-8') as fh:
         src.append(fh.read())
@@ -45,6 +49,25 @@ def build_page():
     with open(path, 'w', encoding='utf-8') as fh:
         fh.write(page)
     return 'file://' + path
+
+
+def check_probe_schema_drift():
+    """tools/probe.py restates the triage schema so it can run standalone.
+    If it drifts from src/Claude.gs the probe stops validating the real thing."""
+    import re
+    gs = open(os.path.join(SRC, 'Claude.gs'), encoding='utf-8').read()
+    py = open(os.path.join(ROOT, 'tools', 'probe.py'), encoding='utf-8').read()
+    gs_block = gs[gs.index('function triageSchema_'):gs.index('/** Classify one email')]
+    py_block = py[py.index('TRIAGE_SCHEMA = {'):py.index('COMPANY_TOOL = {')]
+    gs_fields = set(re.findall(r'^    (\w+): \{', gs_block, re.M))
+    py_fields = set(re.findall(r'^        "(\w+)": \{', py_block, re.M))
+    if gs_fields != py_fields:
+        print("  FAIL  probe.py triage schema has drifted from Claude.gs")
+        print(f"        only in Claude.gs: {sorted(gs_fields - py_fields)}")
+        print(f"        only in probe.py:  {sorted(py_fields - gs_fields)}")
+        return False
+    print(f"  PASS  probe.py schema matches Claude.gs ({len(gs_fields)} fields)")
+    return True
 
 
 def main():
@@ -72,12 +95,13 @@ def main():
         sys.exit("no results - a source file threw while loading")
 
     failed = [r for r in results if not r['pass']]
+    drift_ok = check_probe_schema_drift()
     for r in results:
         print(("  PASS  " if r['pass'] else "  FAIL  ") + r['name'])
         if not r['pass']:
             print("        " + r['err'])
     print(f"\n{len(results) - len(failed)}/{len(results)} passed")
-    sys.exit(1 if failed else 0)
+    sys.exit(1 if (failed or not drift_ok) else 0)
 
 if __name__ == '__main__':
     main()

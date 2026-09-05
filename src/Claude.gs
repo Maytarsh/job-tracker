@@ -73,7 +73,14 @@ var TRIAGE_SYSTEM =
   'be a short phrase quoted verbatim from the email that justifies the category. Set confidence ' +
   'to low when the email is ambiguous or the company had to be inferred.';
 
-var TRIAGE_SCHEMA = {
+/**
+ * Built lazily, not as a top-level var: Apps Script evaluates project files in
+ * alphabetical order, so Claude.gs runs before Config.gs and CATEGORIES/MARKETS
+ * are still undefined at load time. JSON.stringify drops undefined keys without
+ * complaint, which would silently ship a schema with no enum constraints at all.
+ */
+function triageSchema_() {
+  return {
   type: 'object',
   properties: {
     category: { type: 'string', enum: CATEGORIES },
@@ -95,7 +102,8 @@ var TRIAGE_SCHEMA = {
     'source_ats', 'stage_hint', 'confidence', 'evidence'
   ],
   additionalProperties: false
-};
+  };
+}
 
 /** Classify one email. Returns the parsed schema object. */
 function triageMessage_(msg) {
@@ -115,7 +123,7 @@ function triageMessage_(msg) {
         'Subject: ' + msg.subject + '\n\n' +
         msg.body
     }],
-    output_config: { format: { type: 'json_schema', schema: TRIAGE_SCHEMA } }
+    output_config: { format: { type: 'json_schema', schema: triageSchema_() } }
   });
 
   var block = firstOfType_(res.content, 'text');
@@ -123,7 +131,9 @@ function triageMessage_(msg) {
   return JSON.parse(block.text);
 }
 
-var COMPANY_TOOL = {
+/** Lazy for the same load-order reason as triageSchema_(). */
+function companyTool_() {
+  return {
   name: 'save_company_profile',
   description: 'Record the researched profile for one company.',
   strict: true,
@@ -144,7 +154,8 @@ var COMPANY_TOOL = {
     ],
     additionalProperties: false
   }
-};
+  };
+}
 
 var ENRICH_SYSTEM =
   'You research one company and record its profile. Search the web to confirm what the ' +
@@ -170,7 +181,7 @@ function enrichCompany_(companyName, hintUrl) {
     messages: [{ role: 'user', content: prompt }],
     tools: [
       { type: 'web_search_20260209', name: 'web_search', max_uses: 4 },
-      COMPANY_TOOL
+      companyTool_()
     ],
     tool_choice: { type: 'auto' }
   });

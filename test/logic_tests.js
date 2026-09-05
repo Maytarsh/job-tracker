@@ -211,3 +211,30 @@ t('an exact role match keeps the extraction confidence', function () {
   upsertApplication_(b, inv, msgAt(2));
   eq(b.appended[0][A_CONF], 'high');
 });
+
+// ------------------------------------------------- load-order regression
+// Apps Script evaluates files alphabetically, so Claude.gs loads before
+// Config.gs. Anything built at load time from Config's vars gets undefined,
+// and JSON.stringify drops undefined keys silently - shipping a schema with
+// no constraints and no error. Both schemas are built lazily to avoid this.
+t('triage schema carries its enums after an alphabetical load', function () {
+  var schema = triageSchema_();
+  ok(schema.properties.category.enum, 'category enum present');
+  eq(schema.properties.category.enum.length, CATEGORIES.length);
+  ok(schema.properties.confidence.enum.indexOf('low') !== -1, 'confidence enum present');
+  ok(JSON.stringify(schema).indexOf('application_confirmation') !== -1,
+     'enum survives serialization');
+});
+
+t('company tool carries the market vocabulary', function () {
+  var tool = companyTool_();
+  ok(tool.input_schema.properties.market.enum, 'market enum present');
+  eq(tool.input_schema.properties.market.enum.length, MARKETS.length);
+  ok(tool.strict === true, 'strict tool use stays on');
+});
+
+t('no schema is built at load time', function () {
+  // If either is ever hoisted back to a top-level var, this fails.
+  ok(typeof triageSchema_ === 'function', 'triage schema is a function');
+  ok(typeof companyTool_ === 'function', 'company tool is a function');
+});

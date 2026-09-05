@@ -2,7 +2,7 @@
 
 Watches Gmail for job-application mail and maintains a Google Sheet of every company
 you've applied to — what they do, what stage each application is at, and whether it's
-still alive. Runs unattended in Google Apps Script; nothing to install, no server.
+still alive. Runs unattended in Google Apps Script; no server, nothing to install.
 
 ```
 Time trigger (30 min) ─▶ pollInbox()
@@ -10,35 +10,76 @@ Time trigger (30 min) ─▶ pollInbox()
 Daily trigger ────────▶ markStale()   Open + silent 30 days → Ghosted
 ```
 
+## Layout
+
+| | |
+|---|---|
+| `src/` | **Everything that goes into Apps Script.** Paste each file into the editor. |
+| `tools/probe.py` | Validates both API payload shapes against the live API. Local only. |
+| `test/` | Logic suite, run in headless Firefox. Local only. |
+
+Only `src/` reaches Google. If you use [clasp](https://github.com/google/clasp), point
+`rootDir` at `src`.
+
 ## Setup
 
-1. **Create the Sheet.** New Google Sheet → Extensions → Apps Script.
-2. **Add the files.** In the editor, create one file per `.gs` here and paste its
-   contents. Project Settings → tick *Show `appsscript.json`*, then paste that too
-   (it declares the OAuth scopes).
-3. **Add your API key.** Project Settings → Script Properties → Add:
-   `ANTHROPIC_API_KEY` = your key from console.anthropic.com.
+1. **Create the Sheet.** New Google Sheet → **Extensions → Apps Script**. It must be
+   created from inside the spreadsheet — a standalone project from script.google.com
+   isn't bound to a Sheet and `setup()` will fail on `getActive()`.
+2. **Add the files.** Create one editor file per `.gs` in `src/` and paste its contents.
+   Project Settings → tick *Show `appsscript.json`*, then paste that too (it declares
+   the OAuth scopes). Delete the default `Code.gs` stub. Naming the project something
+   recognizable is worth it — the authorization dialog uses that name.
+3. **Add your API key.** Project Settings (⚙️) → Script Properties → *Add script
+   property*: `ANTHROPIC_API_KEY` = your key from console.anthropic.com → *Save*.
    It lives only there — never in the Sheet, so sharing the Sheet never leaks it.
-4. **Run `setup()`.** Pick it from the function dropdown and Run. Google will ask you
-   to authorize Gmail (read-only), Sheets, external requests, and triggers. This
-   creates the four tabs, the formatting, and both triggers.
-5. **Reload the Sheet.** A **Job Tracker** menu appears.
+4. **Run `setup()`.** Creates the four tabs, the formatting, and both triggers.
+   - **Save first** (`Ctrl+S`). Until you do, the toolbar says *No functions* and Run
+     is greyed out — the editor only re-scans on save. This looks exactly like a
+     missing function and is the most common stumble.
+   - Choose **`setup`** in the dropdown, then **▷ Run**. Only these seven appear:
+     `setup`, `onOpen`, `pollInbox`, `runBackfill`, `markStale`, `menuReEnrichSelected`,
+     `menuReplaySelected`. Everything else ends in `_`, Apps Script's private-function
+     convention, and is hidden on purpose.
+   - Authorize: *Review permissions* → your account → **"Google hasn't verified this
+     app"** → **Advanced** → **Go to … (unsafe)** → **Allow**. Expected for any
+     unpublished personal script.
+   - Confirm in the ⏰ **Triggers** panel: `pollInbox` (30 min) and `markStale` (daily).
+5. **Reload the spreadsheet.** The **Job Tracker** menu appears to the right of *Help*,
+   a few seconds after load. If it doesn't show up, ignore it — every menu item is just
+   a function you can run from the editor dropdown instead.
+
+After setup the Sheet has `Applications` and `Companies`, plus `_Processed` and
+`_Skipped` **hidden by design** (☰ *All sheets* at the bottom-left, or View → Hidden
+sheets). Google's default `Sheet1` is still there and can be deleted; `setup()` won't
+touch a sheet it didn't create.
 
 ## First run
 
 `CONFIG.DRY_RUN` starts `true` — classify and log, write nothing.
 
-1. **Job Tracker → Backfill history.** Reads the last 30 days.
-2. Check the two hidden audit tabs (right-click the tab bar → unhide):
-   - **`_Skipped`** — dropped by the prefilter before costing anything. Any real
-     confirmation in here is a miss: add a pattern to `KEYWORD_PATTERNS` or a domain
-     to `ATS_DOMAINS` in `Config.gs`.
-   - **`_Processed`** — everything that reached the model, with the `Evidence` column
-     showing the phrase it decided on. That column is how you tell a misread from a
-     genuinely ambiguous email.
-3. Set `DRY_RUN = false` in `Config.gs`, then **Backfill history** again.
+1. **Run `runBackfill`** (menu, or the editor dropdown). Reads the last 30 days.
+   This is separate from the 30-minute trigger, which only ever looks at the last
+   half hour — the two `30`s in the config are unrelated.
+2. Read the execution log. The last line is the run's stats:
+   ```
+   runBackfill: {"seen":120,"skipped":95,"triaged":25,"written":0,"errors":0,"hitLimit":true}
+   ```
+   - `errors` high, with `401` in the log → bad API key. A 401 isn't retried, so a
+     wrong key fails fast and costs nothing.
+   - `hitLimit: true` → more than `MAX_MESSAGES_PER_RUN` matched, so it **re-queues
+     itself every ~60 seconds** until the window drains. Watch the **Executions** panel
+     rather than clicking Run again.
+3. Check the audit tabs:
+   - **`_Skipped`** — dropped by the prefilter before costing anything. **This is the
+     one that matters:** anything real in here is an application being silently lost.
+     Add a pattern to `KEYWORD_PATTERNS` or a domain to `ATS_DOMAINS` in `Config.gs`.
+   - **`_Processed`** — everything that reached the model. The `Evidence` column shows
+     the phrase it based its call on, which is how you tell a misread from a genuinely
+     ambiguous email.
+4. Set `DRY_RUN = false` in `Config.gs` and run `runBackfill` again.
 
-From then on the 30-minute trigger keeps it current.
+The 30-minute trigger keeps it current from then on.
 
 ## The Sheet
 
@@ -57,31 +98,35 @@ From then on the 30-minute trigger keeps it current.
 | **Notes** | **yours — the automation never reads or writes this column** |
 
 **`Companies`** caches one researched profile per company, so Opus is called once per
-company ever. **`_Processed`** and **`_Skipped`** are the audit trail, hidden by default.
+company ever.
 
 ## Re-testing on real emails
 
 No need to send yourself test mail — replay the ones you already have:
 
-- **Job Tracker → Replay selected `_Processed` rows.** Deletes those rows and re-runs the
-  backfill, so those real emails flow through the whole pipeline again. This is how you
+- **Job Tracker → Replay selected `_Processed` rows.** Deletes those rows and re-runs
+  the backfill, so those real emails flow through the pipeline again. This is how you
   re-test a misclassified email against a tuned prompt.
 - **Holdout.** Set `BACKFILL_HOLDOUT_DAYS = 3` before backfilling to leave the last few
-  days untouched, then let the trigger pick them up on its own — that exercises the
-  incremental path, the dedupe set, and the trigger together on real mail.
+  days untouched, then let the trigger pick them up on its own — exercising the
+  incremental window, the dedupe set, and the trigger together on real mail.
 - **Job Tracker → Re-research selected companies** re-runs enrichment for the selected
   rows if a Market or Description came out wrong.
 
+Skipped messages are deliberately *not* recorded in `_Processed`, so fixing the
+prefilter lets them be reconsidered on the next run. The cost is duplicate `_Skipped`
+rows for mail that gets scanned twice.
+
 ## Tuning
 
-Everything lives in `Config.gs`:
+Everything lives in `src/Config.gs`:
 
 | Setting | Default | |
 |---|---|---|
 | `DRY_RUN` | `true` | flip after the first clean backfill |
-| `POLL_MINUTES` | 30 | re-run `setup()` after changing |
-| `STALE_DAYS` | 30 | when an Open row becomes Ghosted |
+| `POLL_MINUTES` | 30 | how often the trigger runs; re-run `setup()` after changing |
 | `BACKFILL_DAYS` | 30 | how far back history goes |
+| `STALE_DAYS` | 30 | when an Open row becomes Ghosted |
 | `MAX_MESSAGES_PER_RUN` | 50 | chunk size; backfill re-queues itself past this |
 | `MAX_ENRICH_PER_RUN` | 15 | ceiling on Opus calls per execution |
 
@@ -90,24 +135,33 @@ while a false positive costs a fraction of a cent at triage.
 
 ## Cost
 
-Triage is `claude-haiku-4-5` on each candidate email; enrichment is `claude-opus-5`
-with web search, once per company. Expect a few dollars for the initial backfill
-(mostly one-time enrichment) and pennies per day after. `probe.py` prints the real
-per-call numbers.
+Triage is `claude-haiku-4-5` per candidate email; enrichment is `claude-opus-5` with
+web search, once per company. Expect a few dollars for the initial backfill (mostly
+one-time enrichment), then pennies per day. `tools/probe.py` prints real numbers.
 
 ## Development
 
-- `python3 probe.py [Company]` — sends one real triage and one real enrichment request,
-  printing the parsed result, token usage and projected cost. Run this first: it
-  validates both payload shapes outside the Apps Script editor, where iteration is slow.
-- `python3 test/run_tests.py` — runs `test/logic_tests.js` against the `.gs` sources in
-  headless Firefox with the Google services stubbed, covering normalization,
-  prefiltering, body cleaning, stage transitions and the upsert/matching rules.
-  Needs `pip install selenium` and Firefox.
+```bash
+python3 tools/probe.py [Company]   # one real triage + one real enrichment call
+python3 test/run_tests.py          # logic suite (needs: pip install selenium, Firefox)
+```
+
+Run `probe.py` before porting any API change — it validates the payload shapes outside
+the Apps Script editor, where iteration is slow. It restates the triage schema so it
+can run standalone; the test suite fails if that copy drifts from `src/Claude.gs`.
+
+`run_tests.py` loads `src/*.gs` **alphabetically**, which is the order Apps Script
+itself evaluates project files in — not dependency order. That matters: `Claude.gs`
+loads before `Config.gs`, so anything built at load time from Config's variables gets
+`undefined`, and `JSON.stringify` drops undefined keys without error. That silently
+shipped an API schema with no `enum` constraints once. Both request schemas are now
+built lazily inside functions, and there are regression tests for it. **Keep the test
+harness in alphabetical order** — sorting it by dependency would hide the whole class
+of bug.
 
 ## Limits
 
 Well inside the free Apps Script quotas (20k URL fetches/day, 90 min runtime/day).
 Gmail access is read-only — the script never sends, labels, or deletes anything.
-Inbound recruiter outreach and job-board mail are classified but deliberately kept out
-of `Applications`; they're visible in `_Processed` if you want them.
+Recruiter outreach and job-board mail are classified but deliberately kept out of
+`Applications`; they're visible in `_Processed` if you want them.
