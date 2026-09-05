@@ -48,6 +48,14 @@ Only `src/` reaches Google. If you use [clasp](https://github.com/google/clasp),
 5. **Reload the spreadsheet.** The **Job Tracker** menu appears to the right of *Help*,
    a few seconds after load. If it doesn't show up, ignore it — every menu item is just
    a function you can run from the editor dropdown instead.
+6. **Turn on failure alerts.** ⏰ Triggers → ⋮ on `pollInbox` → *Edit trigger* → bottom of
+   the dialog → **Failure notification settings** → *Notify me immediately* → Save.
+
+   Do this every time you run `setup()`. It recreates both triggers, and the setting is
+   stored by Apps Script per-trigger rather than in code — `ScriptApp.newTrigger()` has
+   no API for it — so a fresh `setup()` silently drops you back to *Notify me daily*.
+   For an unattended job the dangerous failure is the quiet one: an expired API key
+   months from now, with you assuming it's still tracking.
 
 After setup the Sheet has `Applications` and `Companies`, plus `_Processed` and
 `_Skipped` **hidden by design** (☰ *All sheets* at the bottom-left, or View → Hidden
