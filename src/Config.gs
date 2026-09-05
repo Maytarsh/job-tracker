@@ -22,6 +22,7 @@ var CONFIG = {
   MAX_BODY_CHARS: 4000,     // truncation before the email is sent to the API
 
   MAX_ENRICH_PER_RUN: 15,   // cap Opus calls per execution (cost + runtime guard)
+  MAX_BACKFILL_CHUNKS: 40,  // hard stop on self-requeueing, whatever goes wrong
 
   API_URL: 'https://api.anthropic.com/v1/messages',
   API_VERSION: '2023-06-01',
@@ -51,7 +52,7 @@ var PROCESSED_HEADERS = [
   'Company', 'Role', 'Confidence', 'Evidence', 'Action'
 ];
 
-var SKIPPED_HEADERS = ['Date', 'From', 'Subject'];
+var SKIPPED_HEADERS = ['Message ID', 'Date', 'From', 'Subject'];
 
 // _Processed column index + marker for rehearsal rows, which never count as done.
 var P_ACTION = 9;

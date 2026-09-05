@@ -262,24 +262,45 @@ function upsertApplication_(book, triage, msg) {
 }
 
 /**
- * Message IDs already handled, so nothing is classified or billed twice.
+ * Every message already examined — triaged *or* skipped by the prefilter.
  *
- * Dry-run rows are deliberately excluded. A dry run is a rehearsal: it logs
- * what it *would* do, so its message IDs must not count as done — otherwise
- * flipping DRY_RUN to false leaves every message already "processed" and the
- * real run silently does nothing.
+ * Skipped messages must be recorded too. If they aren't, each backfill chunk
+ * re-collects the same non-job mail, never drains the window, and re-queues
+ * itself forever. Reconsidering skipped mail after a prefilter change is an
+ * explicit action instead: Job Tracker -> Rescan skipped mail.
+ *
+ * Dry-run rows are excluded: a rehearsal must not consume the messages it only
+ * pretended to handle, or flipping DRY_RUN off would leave nothing to do.
  */
 function loadProcessedIds_() {
-  var sheet = getSheet_(TABS.PROCESSED);
-  var last = sheet.getLastRow();
   var seen = {};
-  if (last < 2) return seen;
 
-  var values = sheet.getRange(2, 1, last - 1, PROCESSED_HEADERS.length).getValues();
-  values.forEach(function (r) {
-    if (r[0] && r[P_ACTION] !== DRY_RUN_ACTION) seen[r[0]] = true;
-  });
+  var processed = getSheet_(TABS.PROCESSED);
+  var lastP = processed.getLastRow();
+  if (lastP > 1) {
+    processed.getRange(2, 1, lastP - 1, PROCESSED_HEADERS.length).getValues()
+      .forEach(function (r) {
+        if (r[0] && r[P_ACTION] !== DRY_RUN_ACTION) seen[r[0]] = true;
+      });
+  }
+
+  var skipped = getSheet_(TABS.SKIPPED);
+  var lastS = skipped.getLastRow();
+  if (lastS > 1) {
+    skipped.getRange(2, 1, lastS - 1, 1).getValues().forEach(function (r) {
+      if (r[0]) seen[r[0]] = true;
+    });
+  }
   return seen;
+}
+
+/** Forget skipped mail so a widened prefilter can reconsider it. */
+function clearSkipped_() {
+  var sheet = getSheet_(TABS.SKIPPED);
+  var last = sheet.getLastRow();
+  if (last < 2) return 0;
+  sheet.getRange(2, 1, last - 1, SKIPPED_HEADERS.length).clearContent();
+  return last - 1;
 }
 
 /**

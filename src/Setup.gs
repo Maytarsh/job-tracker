@@ -101,6 +101,7 @@ function onOpen() {
     .addItem('Backfill history', 'runBackfill')
     .addSeparator()
     .addItem('Flag ghosted rows', 'markStale')
+    .addItem('Rescan skipped mail', 'menuRescanSkipped')
     .addItem('Re-research selected companies', 'menuReEnrichSelected')
     .addSeparator()
     .addItem('Replay selected _Processed rows', 'menuReplaySelected')
@@ -167,6 +168,12 @@ function menuReplaySelected() {
   toast_('Cleared ' + count + ' row(s) — replaying over the backfill window…');
   runBackfill();
   toast_('Replay complete. Check _Processed for the new rows.');
+}
+
+/** Clear _Skipped so a widened prefilter reconsiders that mail. */
+function menuRescanSkipped() {
+  var cleared = clearSkipped_();
+  toast_('Cleared ' + cleared + ' skipped row(s). Run Backfill history to reconsider them.');
 }
 
 function toast_(message) {

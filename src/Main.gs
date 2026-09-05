@@ -5,6 +5,7 @@
 
 var PROP_LAST_RUN = 'LAST_RUN_EPOCH';
 var BACKFILL_TRIGGER = 'runBackfill';
+var PROP_BACKFILL_CHUNKS = 'BACKFILL_CHUNKS';
 
 /** Trigger entry point: everything since the last successful run. */
 function pollInbox() {
@@ -16,7 +17,10 @@ function pollInbox() {
   var after = lastRun - CONFIG.OVERLAP_MINUTES * 60;
   var result = processWindow_(after, 0, CONFIG.MAX_MESSAGES_PER_RUN);
 
-  props.setProperty(PROP_LAST_RUN, String(now));
+  // Only advance past a window we actually drained. Gmail returns newest-first,
+  // so a capped run leaves the *oldest* messages unhandled — moving the cursor
+  // to now would drop them permanently.
+  if (!result.hitLimit) props.setProperty(PROP_LAST_RUN, String(now));
   Logger.log('pollInbox: ' + JSON.stringify(result));
   return result;
 }
@@ -29,6 +33,20 @@ function pollInbox() {
 function runBackfill() {
   clearBackfillTriggers_();
 
+  // A chunk counter, not just a drained-window check. The window draining is
+  // what *should* end the backfill; this is the backstop for when it doesn't,
+  // so a bug can never leave a 60-second trigger running against the mailbox
+  // indefinitely.
+  var props0 = PropertiesService.getScriptProperties();
+  var chunk = Number(props0.getProperty(PROP_BACKFILL_CHUNKS)) || 0;
+  if (chunk >= CONFIG.MAX_BACKFILL_CHUNKS) {
+    props0.deleteProperty(PROP_BACKFILL_CHUNKS);
+    Logger.log('backfill stopped after ' + chunk + ' chunks (MAX_BACKFILL_CHUNKS). ' +
+               'Re-run to continue if the window is genuinely that large.');
+    return { stopped: 'chunk limit' };
+  }
+  props0.setProperty(PROP_BACKFILL_CHUNKS, String(chunk + 1));
+
   var now = Math.floor(Date.now() / 1000);
   var after = now - CONFIG.BACKFILL_DAYS * 86400;
   var before = CONFIG.BACKFILL_HOLDOUT_DAYS
@@ -40,11 +58,12 @@ function runBackfill() {
 
   if (result.hitLimit) {
     ScriptApp.newTrigger(BACKFILL_TRIGGER).timeBased().after(60 * 1000).create();
-    Logger.log('backfill continues in ~1 minute');
+    Logger.log('backfill continues in ~1 minute (chunk ' + (chunk + 1) + ')');
   } else {
     // Backfill reached the present; hand the baton to the incremental poll.
-    PropertiesService.getScriptProperties()
-      .setProperty(PROP_LAST_RUN, String(before || now));
+    var props = PropertiesService.getScriptProperties();
+    props.setProperty(PROP_LAST_RUN, String(before || now));
+    props.deleteProperty(PROP_BACKFILL_CHUNKS);
     Logger.log('backfill complete');
   }
   return result;
@@ -68,9 +87,9 @@ function processWindow_(afterEpoch, beforeEpoch, limit) {
   messages.forEach(function (msg) {
     if (!isCandidate_(msg)) {
       stats.skipped++;
-      book.skipped.push([msg.date, msg.from, msg.subject]);
-      // Not logged to _Processed: it never cost anything, and leaving it out
-      // means a prefilter fix lets it be reconsidered on the next run.
+      // Recorded by ID, so the window actually drains. Reconsidering these
+      // after a prefilter change is an explicit action: Rescan skipped mail.
+      book.skipped.push([msg.id, msg.date, msg.from, msg.subject]);
       return;
     }
 

@@ -243,25 +243,34 @@ t('no schema is built at load time', function () {
 // A dry run is a rehearsal. If its message IDs counted as processed, flipping
 // DRY_RUN to false would leave every message already "done" and the real run
 // would write nothing while reporting success.
-function fakeProcessedSheet(rows) {
-  var data = [PROCESSED_HEADERS].concat(rows);
+function skippedRow(id) {
+  var r = new Array(SKIPPED_HEADERS.length).fill('');
+  r[0] = id;
+  return r;
+}
+function withTabs(processedRows, skippedRows, fn) {
+  var sheets = {};
+  sheets[TABS.PROCESSED] = fakeSheet(PROCESSED_HEADERS, processedRows);
+  sheets[TABS.SKIPPED] = fakeSheet(SKIPPED_HEADERS, skippedRows);
+  var original = getSheet_;
+  getSheet_ = function (name) { return sheets[name]; };
+  try { return fn(sheets); } finally { getSheet_ = original; }
+}
+function fakeSheet(headers, rows) {
+  var data = [headers].concat(rows);
   return {
     getLastRow: function () { return data.length; },
     getRange: function (r, c, n, w) {
       return {
-        getValues: function () { return data.slice(r - 1, r - 1 + n); },
-        clearContent: function () { data = [PROCESSED_HEADERS]; },
-        setValues: function (v) { data = [PROCESSED_HEADERS].concat(v); }
+        getValues: function () {
+          return data.slice(r - 1, r - 1 + n).map(function (row) { return row.slice(c - 1, c - 1 + w); });
+        },
+        clearContent: function () { data = [headers]; },
+        setValues: function (v) { data = [headers].concat(v); }
       };
     },
     _data: function () { return data; }
   };
-}
-function withProcessedSheet(rows, fn) {
-  var sheet = fakeProcessedSheet(rows);
-  var original = getSheet_;
-  getSheet_ = function () { return sheet; };
-  try { return fn(sheet); } finally { getSheet_ = original; }
 }
 function processedRow(id, action) {
   var r = new Array(PROCESSED_HEADERS.length).fill('');
@@ -271,7 +280,7 @@ function processedRow(id, action) {
 }
 
 t('dry-run rows are not treated as already processed', function () {
-  withProcessedSheet([processedRow('m1', 'dry-run'), processedRow('m2', 'dry-run')],
+  withTabs([processedRow('m1', 'dry-run'), processedRow('m2', 'dry-run')], [],
     function () {
       eq(Object.keys(loadProcessedIds_()).length, 0,
          'a rehearsal must not consume the messages');
@@ -279,8 +288,8 @@ t('dry-run rows are not treated as already processed', function () {
 });
 
 t('real rows are treated as already processed', function () {
-  withProcessedSheet([processedRow('m1', 'created Wiz / Researcher'),
-                      processedRow('m2', 'ignored (not_related)')],
+  withTabs([processedRow('m1', 'created Wiz / Researcher'),
+            processedRow('m2', 'ignored (not_related)')], [],
     function () {
       var seen = loadProcessedIds_();
       ok(seen['m1'] && seen['m2'], 'genuinely handled messages are skipped');
@@ -288,19 +297,62 @@ t('real rows are treated as already processed', function () {
 });
 
 t('purging drops only the rehearsal rows', function () {
-  withProcessedSheet([processedRow('m1', 'dry-run'),
-                      processedRow('m2', 'created Wiz / Researcher'),
-                      processedRow('m3', 'dry-run')],
-    function (sheet) {
+  withTabs([processedRow('m1', 'dry-run'),
+            processedRow('m2', 'created Wiz / Researcher'),
+            processedRow('m3', 'dry-run')], [],
+    function (sheets) {
       eq(purgeDryRunRows_(), 2, 'two rehearsal rows removed');
-      var left = sheet._data().slice(1);
+      var left = sheets[TABS.PROCESSED]._data().slice(1);
       eq(left.length, 1);
       eq(left[0][0], 'm2', 'the real row survives');
     });
 });
 
 t('purging is a no-op when there is nothing to purge', function () {
-  withProcessedSheet([processedRow('m1', 'created Wiz / Researcher')], function () {
+  withTabs([processedRow('m1', 'created Wiz / Researcher')], [], function () {
     eq(purgeDryRunRows_(), 0);
   });
+});
+
+
+// -------------------------------------- backfill termination (runaway guard)
+// Skipped messages must be recorded, or every backfill chunk re-collects the
+// same non-job mail, hitLimit never clears, and the 60-second continuation
+// trigger re-queues itself forever.
+t('skipped messages count as seen, so the window drains', function () {
+  withTabs([], [skippedRow('m1'), skippedRow('m2')], function () {
+    var seen = loadProcessedIds_();
+    ok(seen['m1'] && seen['m2'], 'skipped mail is not re-collected next chunk');
+  });
+});
+
+t('processed and skipped IDs are merged', function () {
+  withTabs([processedRow('p1', 'created Wiz / Researcher')], [skippedRow('s1')],
+    function () {
+      var seen = loadProcessedIds_();
+      ok(seen['p1'], 'triaged message seen');
+      ok(seen['s1'], 'skipped message seen');
+      eq(Object.keys(seen).length, 2);
+    });
+});
+
+t('a rehearsal still consumes nothing, even alongside skipped mail', function () {
+  withTabs([processedRow('p1', 'dry-run')], [skippedRow('s1')], function () {
+    var seen = loadProcessedIds_();
+    ok(!seen['p1'], 'dry-run row ignored');
+    ok(seen['s1'], 'skipped row still counts - it cost nothing to decide');
+  });
+});
+
+t('rescanning clears skipped mail for reconsideration', function () {
+  withTabs([], [skippedRow('s1'), skippedRow('s2')], function (sheets) {
+    eq(clearSkipped_(), 2);
+    eq(sheets[TABS.SKIPPED]._data().length, 1, 'header row only');
+    eq(Object.keys(loadProcessedIds_()).length, 0, 'now eligible again');
+  });
+});
+
+t('a skipped row carries the message ID first', function () {
+  eq(SKIPPED_HEADERS[0], 'Message ID');
+  eq(SKIPPED_HEADERS.length, 4);
 });

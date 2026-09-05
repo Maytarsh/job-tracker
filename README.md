@@ -129,9 +129,10 @@ No need to send yourself test mail — replay the ones you already have:
 - **Job Tracker → Re-research selected companies** re-runs enrichment for the selected
   rows if a Market or Description came out wrong.
 
-Skipped messages are deliberately *not* recorded in `_Processed`, so fixing the
-prefilter lets them be reconsidered on the next run. The cost is duplicate `_Skipped`
-rows for mail that gets scanned twice.
+Skipped mail is recorded by message ID, so a backfill window actually drains — without
+that, every chunk re-collects the same non-job mail and the continuation trigger
+re-queues itself forever. Reconsidering it after widening the prefilter is therefore an
+explicit action: **Job Tracker → Rescan skipped mail**, then run the backfill again.
 
 ## Tuning
 
@@ -145,6 +146,7 @@ Everything lives in `src/Config.gs`:
 | `STALE_DAYS` | 30 | when an Open row becomes Ghosted |
 | `MAX_MESSAGES_PER_RUN` | 50 | chunk size; backfill re-queues itself past this |
 | `MAX_ENRICH_PER_RUN` | 15 | ceiling on Opus calls per execution |
+| `MAX_BACKFILL_CHUNKS` | 40 | hard stop on backfill self-requeueing |
 
 The prefilter is deliberately over-inclusive: a missed confirmation is a lost row,
 while a false positive costs a fraction of a cent at triage.
