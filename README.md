@@ -51,10 +51,13 @@ Only `src/` reaches Google. If you use [clasp](https://github.com/google/clasp),
 6. **Turn on failure alerts.** ⏰ Triggers → ⋮ on `pollInbox` → *Edit trigger* → bottom of
    the dialog → **Failure notification settings** → *Notify me immediately* → Save.
 
-   Do this every time you run `setup()`. It recreates both triggers, and the setting is
-   stored by Apps Script per-trigger rather than in code — `ScriptApp.newTrigger()` has
-   no API for it — so a fresh `setup()` silently drops you back to *Notify me daily*.
-   For an unattended job the dangerous failure is the quiet one: an expired API key
+   Set once and it stays — editing code, re-pasting files, and normal trigger firings
+   never disturb it. The one thing that clears it is **re-running `setup()`**, which
+   deletes and recreates both triggers; the setting belongs to the trigger, not the
+   code, and `ScriptApp.newTrigger()` has no API for it. So if you ever change
+   `POLL_MINUTES` or rebuild the project, set it again afterwards.
+
+   Worth doing, because the dangerous failure here is the quiet one: an expired API key
    months from now, with you assuming it's still tracking.
 
 After setup the Sheet has `Applications` and `Companies`, plus `_Processed` and
