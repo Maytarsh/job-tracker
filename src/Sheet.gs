@@ -261,14 +261,42 @@ function upsertApplication_(book, triage, msg) {
   return 'created ' + triage.company + ' / ' + (triage.role || '(no role)');
 }
 
-/** Message IDs already handled, so nothing is classified or billed twice. */
+/**
+ * Message IDs already handled, so nothing is classified or billed twice.
+ *
+ * Dry-run rows are deliberately excluded. A dry run is a rehearsal: it logs
+ * what it *would* do, so its message IDs must not count as done — otherwise
+ * flipping DRY_RUN to false leaves every message already "processed" and the
+ * real run silently does nothing.
+ */
 function loadProcessedIds_() {
   var sheet = getSheet_(TABS.PROCESSED);
   var last = sheet.getLastRow();
   var seen = {};
   if (last < 2) return seen;
-  sheet.getRange(2, 1, last - 1, 1).getValues().forEach(function (r) {
-    if (r[0]) seen[r[0]] = true;
+
+  var values = sheet.getRange(2, 1, last - 1, PROCESSED_HEADERS.length).getValues();
+  values.forEach(function (r) {
+    if (r[0] && r[P_ACTION] !== DRY_RUN_ACTION) seen[r[0]] = true;
   });
   return seen;
+}
+
+/**
+ * Drop rehearsal rows once we start writing for real, so _Processed stays a
+ * true record of what was acted on and repeated dry runs can't pile up.
+ */
+function purgeDryRunRows_() {
+  var sheet = getSheet_(TABS.PROCESSED);
+  var last = sheet.getLastRow();
+  if (last < 2) return 0;
+
+  var width = PROCESSED_HEADERS.length;
+  var values = sheet.getRange(2, 1, last - 1, width).getValues();
+  var keep = values.filter(function (r) { return r[P_ACTION] !== DRY_RUN_ACTION; });
+  if (keep.length === values.length) return 0;
+
+  sheet.getRange(2, 1, values.length, width).clearContent();
+  if (keep.length) sheet.getRange(2, 1, keep.length, width).setValues(keep);
+  return values.length - keep.length;
 }

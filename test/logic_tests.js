@@ -238,3 +238,69 @@ t('no schema is built at load time', function () {
   ok(typeof triageSchema_ === 'function', 'triage schema is a function');
   ok(typeof companyTool_ === 'function', 'company tool is a function');
 });
+
+// ------------------------------------------------ dry-run / dedupe contract
+// A dry run is a rehearsal. If its message IDs counted as processed, flipping
+// DRY_RUN to false would leave every message already "done" and the real run
+// would write nothing while reporting success.
+function fakeProcessedSheet(rows) {
+  var data = [PROCESSED_HEADERS].concat(rows);
+  return {
+    getLastRow: function () { return data.length; },
+    getRange: function (r, c, n, w) {
+      return {
+        getValues: function () { return data.slice(r - 1, r - 1 + n); },
+        clearContent: function () { data = [PROCESSED_HEADERS]; },
+        setValues: function (v) { data = [PROCESSED_HEADERS].concat(v); }
+      };
+    },
+    _data: function () { return data; }
+  };
+}
+function withProcessedSheet(rows, fn) {
+  var sheet = fakeProcessedSheet(rows);
+  var original = getSheet_;
+  getSheet_ = function () { return sheet; };
+  try { return fn(sheet); } finally { getSheet_ = original; }
+}
+function processedRow(id, action) {
+  var r = new Array(PROCESSED_HEADERS.length).fill('');
+  r[0] = id;
+  r[P_ACTION] = action;
+  return r;
+}
+
+t('dry-run rows are not treated as already processed', function () {
+  withProcessedSheet([processedRow('m1', 'dry-run'), processedRow('m2', 'dry-run')],
+    function () {
+      eq(Object.keys(loadProcessedIds_()).length, 0,
+         'a rehearsal must not consume the messages');
+    });
+});
+
+t('real rows are treated as already processed', function () {
+  withProcessedSheet([processedRow('m1', 'created Wiz / Researcher'),
+                      processedRow('m2', 'ignored (not_related)')],
+    function () {
+      var seen = loadProcessedIds_();
+      ok(seen['m1'] && seen['m2'], 'genuinely handled messages are skipped');
+    });
+});
+
+t('purging drops only the rehearsal rows', function () {
+  withProcessedSheet([processedRow('m1', 'dry-run'),
+                      processedRow('m2', 'created Wiz / Researcher'),
+                      processedRow('m3', 'dry-run')],
+    function (sheet) {
+      eq(purgeDryRunRows_(), 2, 'two rehearsal rows removed');
+      var left = sheet._data().slice(1);
+      eq(left.length, 1);
+      eq(left[0][0], 'm2', 'the real row survives');
+    });
+});
+
+t('purging is a no-op when there is nothing to purge', function () {
+  withProcessedSheet([processedRow('m1', 'created Wiz / Researcher')], function () {
+    eq(purgeDryRunRows_(), 0);
+  });
+});

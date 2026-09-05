@@ -52,6 +52,13 @@ function runBackfill() {
 
 /** The pipeline: collect -> prefilter -> triage -> upsert -> flush. */
 function processWindow_(afterEpoch, beforeEpoch, limit) {
+  // First real run after a rehearsal: clear the dry-run rows so their messages
+  // are reconsidered instead of being skipped as already handled.
+  if (!CONFIG.DRY_RUN) {
+    var purged = purgeDryRunRows_();
+    if (purged) Logger.log('cleared ' + purged + ' dry-run row(s) before writing');
+  }
+
   var processedIds = loadProcessedIds_();
   var messages = collectMessages_(afterEpoch, beforeEpoch, processedIds, limit);
 
@@ -79,7 +86,7 @@ function processWindow_(afterEpoch, beforeEpoch, limit) {
 
     var action;
     if (CONFIG.DRY_RUN) {
-      action = 'dry-run';
+      action = DRY_RUN_ACTION;
     } else if (WRITE_CATEGORIES[triage.category]) {
       try {
         action = upsertApplication_(book, triage, msg);

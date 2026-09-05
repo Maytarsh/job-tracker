@@ -79,6 +79,11 @@ touch a sheet it didn't create.
      ambiguous email.
 4. Set `DRY_RUN = false` in `Config.gs` and run `runBackfill` again.
 
+A dry run is a rehearsal, so its `_Processed` rows are marked `dry-run` and do **not**
+count as handled — otherwise flipping the flag would leave every message already
+"processed" and the real run would write nothing while reporting success. The first
+run with `DRY_RUN = false` clears those rehearsal rows first and logs how many.
+
 The 30-minute trigger keeps it current from then on.
 
 ## The Sheet

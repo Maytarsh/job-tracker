@@ -53,6 +53,10 @@ var PROCESSED_HEADERS = [
 
 var SKIPPED_HEADERS = ['Date', 'From', 'Subject'];
 
+// _Processed column index + marker for rehearsal rows, which never count as done.
+var P_ACTION = 9;
+var DRY_RUN_ACTION = 'dry-run';
+
 /** Controlled vocabulary for the Market column. */
 var MARKETS = [
   'Cybersecurity', 'Networking', 'Storage', 'Cloud/Infra', 'Data/AI',
