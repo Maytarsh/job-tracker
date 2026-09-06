@@ -181,8 +181,14 @@ Enrichment takes about 90 seconds per company, so a run does at most
 later polls. This is deliberate: an execution killed at Apps Script's 6-minute ceiling
 loses everything it had buffered, including the backfill's continuation trigger.
 
-Triage is `claude-haiku-4-5` per candidate email; enrichment is `claude-opus-5` with
-web search and web fetch, once per company. Expect a few dollars for the initial backfill (mostly
+Triage is `claude-haiku-4-5` per candidate email; enrichment is `claude-sonnet-5` with
+web search and web fetch, once per company — roughly $0.17 a company, most of it the
+search results being re-sent on each turn of the tool loop.
+
+`CONFIG.DAILY_BUDGET_USD` is the backstop: every response is priced from its own usage
+into a daily total, and `callAnthropic_()` refuses to send anything once the day is over
+budget. Any model named in Config needs an entry in `PRICE_PER_MTOK`, or its calls are
+priced at zero and the ceiling never sees them. Expect a few dollars for the initial backfill (mostly
 one-time enrichment), then pennies per day. `tools/probe.py` prints real numbers.
 
 ## Development

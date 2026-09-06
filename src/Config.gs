@@ -9,7 +9,11 @@ var CONFIG = {
   DRY_RUN: true,
 
   TRIAGE_MODEL: 'claude-haiku-4-5',
-  ENRICH_MODEL: 'claude-opus-5',
+  // Sonnet, not Opus: the task is search, read a page, pick a value from a
+  // thirteen-item enum and write two sentences. The one case that defeated
+  // this — "Algorio" — was a missing location hint, not missing capability,
+  // and the hint is supplied now. Measured at ~$0.39 a company on Opus 5.
+  ENRICH_MODEL: 'claude-sonnet-5',
 
   POLL_MINUTES: 30,      // how often pollInbox() runs
   OVERLAP_MINUTES: 10,   // re-scan window, so a message landing mid-run isn't skipped
@@ -58,8 +62,12 @@ var CONFIG = {
   // $ per million tokens, from the published rates. Cache reads bill less than
   // fresh input; counting them at full price makes the ceiling err high, which
   // is the safe direction for a guard.
+  // A model missing from this table is priced at zero and escapes the ceiling
+  // entirely, so add an entry before ever changing TRIAGE_MODEL or
+  // ENRICH_MODEL. There is a test that fails if either is unpriced.
   PRICE_PER_MTOK: {
     'claude-haiku-4-5': { input: 1, output: 5 },
+    'claude-sonnet-5': { input: 2, output: 10 },
     'claude-opus-5': { input: 5, output: 25 }
   },
   PRICE_PER_SEARCH: 0.01   // web_search bills per search on top of tokens
