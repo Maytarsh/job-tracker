@@ -206,6 +206,9 @@ function companyProfile_(book, companyName, hintUrl, locationHint) {
   if (book.enrichCount >= CONFIG.MAX_ENRICH_PER_RUN) {
     return { market: '', description: '' };  // picked up on a later run
   }
+  if (!enrichBudgetLeft_(book)) {
+    return { market: '', description: '' };  // ditto — see fillMissingProfiles_
+  }
 
   var profile;
   try {
@@ -231,6 +234,53 @@ function companyProfile_(book, companyName, hintUrl, locationHint) {
     new Date()
   ]);
   return profile;
+}
+
+/**
+ * Is there time to start another? Research takes roughly a minute and a half —
+ * search, fetch, and a model that thinks — so starting one near the end of the
+ * budget is how a run gets killed with its whole buffer still in memory.
+ */
+function enrichBudgetLeft_(book) {
+  if (!book.deadline) return true;
+  return Date.now() < book.deadline - CONFIG.ENRICH_RESERVE_SECONDS * 1000;
+}
+
+/**
+ * Spend whatever budget is left on rows whose Market never got filled in.
+ *
+ * A run under time pressure writes the row and leaves the profile blank. Before
+ * this existed, that blank was only ever filled if another email from the same
+ * company happened to arrive later — so a one-off application stayed blank
+ * forever. Now every poll picks up where the last one ran out, and the sheet
+ * completes itself over a few cycles without anyone doing anything.
+ */
+function fillMissingProfiles_(book) {
+  if (CONFIG.DRY_RUN) return 0;
+
+  var targets = [];
+  book.rows.forEach(function (row, i) {
+    if (!row[A_MARKET] && row[A_COMPANY]) targets.push({ row: row, index: i });
+  });
+  book.appended.forEach(function (row) {
+    // Appended rows flush as inserts, so they are mutated but never marked dirty.
+    if (!row[A_MARKET] && row[A_COMPANY]) targets.push({ row: row, index: -1 });
+  });
+
+  var filled = 0;
+  for (var t = 0; t < targets.length; t++) {
+    if (!enrichBudgetLeft_(book)) break;
+    var row = targets[t].row;
+    var profile = companyProfile_(book, row[A_COMPANY], row[A_JOB_URL], row[A_LOCATION]);
+    if (!profile.market && !profile.description) break;  // hit the cap or the clock
+    row[A_MARKET] = safeCell_(profile.market, 40);
+    row[A_DESC] = safeCell_(profile.description, 600);
+    if (targets[t].index >= 0) book.dirty[targets[t].index] = true;
+    filled++;
+  }
+
+  if (filled) Logger.log('filled ' + filled + ' missing company profile(s)');
+  return filled;
 }
 
 // ------------------------------------------------------------------- upsert
@@ -369,7 +419,7 @@ function loadProcessedIds_() {
   if (lastP > 1) {
     processed.getRange(2, 1, lastP - 1, PROCESSED_HEADERS.length).getValues()
       .forEach(function (r) {
-        if (r[0] && r[P_ACTION] !== DRY_RUN_ACTION) seen[r[0]] = true;
+        if (r[0] && !isRetryable_(r[P_ACTION])) seen[r[0]] = true;
       });
   }
 
@@ -381,6 +431,19 @@ function loadProcessedIds_() {
     });
   }
   return seen;
+}
+
+/**
+ * Actions that mean the message was not actually dealt with.
+ *
+ * A rehearsal pretended to handle it. A row whose upsert threw was classified —
+ * and billed — but never reached the sheet, and used to count as done anyway,
+ * so the only trace of the loss was one line in an execution log nobody reads.
+ * Both get another attempt; the failed row stays in the log as a record.
+ */
+function isRetryable_(action) {
+  var text = String(action || '');
+  return text === DRY_RUN_ACTION || text.indexOf('error:') === 0;
 }
 
 /** Forget skipped mail so a widened prefilter can reconsider it. */

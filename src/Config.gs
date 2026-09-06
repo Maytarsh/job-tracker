@@ -21,10 +21,16 @@ var CONFIG = {
   MAX_MESSAGES_PER_RUN: 50, // chunk size; keeps executions under the 6-minute cap
   MAX_BODY_CHARS: 4000,     // truncation before the email is sent to the API
 
-  MAX_ENRICH_PER_RUN: 15,   // cap Opus calls per execution (cost + runtime guard)
+  MAX_ENRICH_PER_RUN: 3,    // cap Opus calls per execution (cost guard)
   ENRICH_MAX_SEARCHES: 6,   // web_search calls the research model may make per company
   ENRICH_MAX_FETCHES: 3,    // pages it may open to read a company's own site
   MAX_BACKFILL_CHUNKS: 40,  // hard stop on self-requeueing, whatever goes wrong
+
+  // Apps Script kills an execution at 6 minutes and everything buffered in
+  // memory dies with it — the _Processed rows, the new Applications rows, and
+  // the backfill's continuation trigger. Stop early and flush instead.
+  RUN_BUDGET_SECONDS: 240,
+  ENRICH_RESERVE_SECONDS: 120, // don't start research without this much left
 
   API_URL: 'https://api.anthropic.com/v1/messages',
   API_VERSION: '2023-06-01',

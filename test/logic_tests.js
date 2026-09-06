@@ -529,3 +529,130 @@ t('companyProfile_ hands the location to the research call', function () {
     eq(profile.market, 'Fintech');
   } finally { enrichCompany_ = original; }
 });
+
+// ------------------------------------------------- loss-prevention contract
+// Every path here exists because a message can be examined, paid for, and then
+// silently dropped — which is how a month of applications went missing while
+// the sheet looked complete.
+
+t('a failed upsert is retried rather than counted as done', function () {
+  withTabs([processedRow('m1', 'error: Exception: boom')], [], function () {
+    eq(Object.keys(loadProcessedIds_()).length, 0,
+       'a message whose write threw must be reconsidered');
+  });
+});
+
+t('a successful action still counts as done', function () {
+  withTabs([processedRow('m1', 'created Wiz / Backend Engineer'),
+            processedRow('m2', 'ignored (job_alert_or_marketing)')], [], function () {
+    eq(Object.keys(loadProcessedIds_()).length, 2, 'real outcomes are final');
+  });
+});
+
+t('dry-run and error rows are both retryable, nothing else is', function () {
+  ok(isRetryable_('dry-run'), 'rehearsal');
+  ok(isRetryable_('error: Exception: boom'), 'failed write');
+  ok(!isRetryable_('created Wiz / Backend Engineer'), 'a created row is done');
+  ok(!isRetryable_('ignored (not_related)'), 'a deliberate skip is done');
+  ok(!isRetryable_(''), 'an empty action is not a licence to reprocess');
+});
+
+t('research is refused when the run is nearly out of time', function () {
+  var book = fakeBook();
+  book.enrichCount = 0;               // the cap is not what should stop this
+  book.deadline = Date.now() + 1000;  // less than ENRICH_RESERVE_SECONDS left
+  ok(!enrichBudgetLeft_(book), 'no time to start a 90-second call');
+
+  var called = false;
+  var original = enrichCompany_;
+  enrichCompany_ = function () { called = true; return null; };
+  try {
+    var profile = companyProfile_(book, 'Algorio', '', 'Tel Aviv');
+    eq(profile.market, '', 'left blank for a later run');
+    ok(!called, 'the API was never called');
+  } finally { enrichCompany_ = original; }
+});
+
+t('a run with time to spare still researches', function () {
+  var book = fakeBook();
+  book.deadline = Date.now() + (CONFIG.ENRICH_RESERVE_SECONDS + 60) * 1000;
+  ok(enrichBudgetLeft_(book), 'budget is available');
+});
+
+t('a book with no deadline is unrestricted', function () {
+  ok(enrichBudgetLeft_(fakeBook()), 'menu-driven calls are not time-boxed by accident');
+});
+
+// fillMissingProfiles_ spends money, so it is a no-op during a rehearsal. These
+// exercise the real path.
+function whileWriting(fn) {
+  var was = CONFIG.DRY_RUN;
+  CONFIG.DRY_RUN = false;
+  try { return fn(); } finally { CONFIG.DRY_RUN = was; }
+}
+
+t('a rehearsal never pays for research', function () {
+  var book = fakeBook();
+  book.enrichCount = 0;
+  book.rows = [['Algorio', 'Backend', '', '', 'Open', 'Applied',
+                '', '', '', '', '', 'Tel Aviv', '', '', '']];
+  var called = false;
+  var original = enrichCompany_;
+  enrichCompany_ = function () { called = true; return null; };
+  try {
+    CONFIG.DRY_RUN = true;
+    eq(fillMissingProfiles_(book), 0, 'nothing filled');
+    ok(!called, 'no API call during a dry run');
+  } finally { enrichCompany_ = original; }
+});
+
+t('leftover budget fills in rows whose Market never got written', function () {
+  var book = fakeBook();
+  book.enrichCount = 0;
+  book.rows = [
+    ['Algorio', 'Backend', '', '', 'Open', 'Applied', '', '', '', '', '', 'Tel Aviv', '', '', ''],
+    ['Wiz', 'Security', 'Cybersecurity', 'desc', 'Open', 'Applied', '', '', '', '', '', '', '', '', '']
+  ];
+  var asked = [];
+  var original = enrichCompany_;
+  enrichCompany_ = function (name, url, location) {
+    asked.push({ name: name, location: location });
+    return {
+      market: 'Fintech', sub_market: '', description: 'Algorio builds trading infrastructure.',
+      website: '', hq_location: '', employee_range: '', founded_year: ''
+    };
+  };
+  try {
+    eq(whileWriting(function () { return fillMissingProfiles_(book); }), 1,
+       'only the blank row is researched');
+    eq(asked.length, 1);
+    eq(asked[0].name, 'Algorio');
+    eq(asked[0].location, 'Tel Aviv', 'the row carries its own location hint');
+    eq(book.rows[0][A_MARKET], 'Fintech');
+    ok(book.dirty[0], 'the filled row is queued for writing');
+    ok(!book.dirty[1], 'the complete row is left alone');
+  } finally { enrichCompany_ = original; }
+});
+
+t('filling in stops at the per-run cap instead of blanking rows', function () {
+  var book = fakeBook();
+  book.enrichCount = 0;
+  book.rows = [];
+  for (var i = 0; i < CONFIG.MAX_ENRICH_PER_RUN + 2; i++) {
+    book.rows.push(['Co' + i, 'Role', '', '', 'Open', 'Applied',
+                    '', '', '', '', '', '', '', '', '']);
+  }
+  var original = enrichCompany_;
+  enrichCompany_ = function () {
+    return {
+      market: 'Other', sub_market: '', description: 'A company that does things.',
+      website: '', hq_location: '', employee_range: '', founded_year: ''
+    };
+  };
+  try {
+    eq(whileWriting(function () { return fillMissingProfiles_(book); }),
+       CONFIG.MAX_ENRICH_PER_RUN, 'stops at the cap');
+    eq(book.rows[CONFIG.MAX_ENRICH_PER_RUN][A_MARKET], '',
+       'rows past the cap are left blank, not overwritten');
+  } finally { enrichCompany_ = original; }
+});
