@@ -46,6 +46,11 @@ function formatApplications_(sheet) {
   sheet.setColumnWidth(A_NOTES + 1, 260);
   sheet.getRange(2, A_DESC + 1, sheet.getMaxRows() - 1, 1).setWrap(true);
 
+  // Days quiet is a count, not a date. Subtracting two dates leaves Sheets
+  // formatting the result as one, so 22 days renders as 22/01/1900 — the right
+  // number wearing the wrong clothes. Pin the format to a plain integer.
+  sheet.getRange(2, A_QUIET + 1, sheet.getMaxRows() - 1, 1).setNumberFormat('0');
+
   var lastRow = sheet.getMaxRows();
   var statusRange = sheet.getRange(2, A_STATUS + 1, lastRow - 1, 1);
   var stageRange = sheet.getRange(2, A_STAGE + 1, lastRow - 1, 1);
