@@ -5,7 +5,11 @@ Sends two real requests with ANTHROPIC_API_KEY from the environment:
   1. Triage   - claude-haiku-4-5 + output_config.format (json_schema)
   2. Enrich   - claude-opus-5 + web_search server tool + strict tool use
 
-Uses only the stdlib, and mirrors exactly what UrlFetchApp will send from Apps Script.
+Stdlib only, deliberately - do not reach for `requests` here. Two properties depend
+on it: the payloads mirror exactly what UrlFetchApp sends from Apps Script, which has
+no package ecosystem to borrow from, and the probe stays runnable straight from a
+checkout when the API is the thing under suspicion. It is the one file in the repo
+with no dependency to install, and worth keeping that way.
 """
 import json
 import os
