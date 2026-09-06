@@ -170,9 +170,13 @@ one-time enrichment), then pennies per day. `tools/probe.py` prints real numbers
 
 ## Development
 
+Python dependencies are managed with [uv](https://docs.astral.sh/uv/) and committed, so
+there is nothing to install by hand — `uv run` builds the environment from `uv.lock` on
+first use.
+
 ```bash
-python3 tools/probe.py [Company]   # one real triage + one real enrichment call
-python3 test/run_tests.py          # logic suite (needs: pip install selenium, Firefox)
+uv run python tools/probe.py [Company]   # one real triage + one real enrichment call
+uv run python test/run_tests.py          # logic suite (needs Firefox)
 ```
 
 Run `probe.py` before porting any API change — it validates the payload shapes outside

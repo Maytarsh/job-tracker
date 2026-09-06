@@ -1,0 +1,8 @@
+[project]
+name = "job-tracker-tools"
+version = "0.1.0"
+description = "Local-only tooling for the job-tracker Apps Script project: the logic test harness and the API payload probe."
+requires-python = ">=3.9"
+dependencies = [
+    "selenium>=4.20",
+]

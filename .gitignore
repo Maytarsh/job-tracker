@@ -2,3 +2,4 @@ test/.harness.html
 test/.order.html
 __pycache__/
 *.pyc
+.venv/
