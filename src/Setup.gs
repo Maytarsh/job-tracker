@@ -210,6 +210,7 @@ function menuCoverage() {
     if (row[A_COMPANY] && !row[A_MARKET]) blanks++;
   });
 
+  var unclassified = countUnclassified_();
   var lines = [
     oldest
       ? 'Mail examined back to: ' + oldest.toDateString()
@@ -218,6 +219,11 @@ function menuCoverage() {
     'Rows still missing a Market: ' + blanks +
       (blanks ? ' (Fill in missing company profiles)' : '')
   ];
+
+  if (unclassified) {
+    lines.push('Messages that could not be classified: ' + unclassified +
+               ' (see _Processed, Action starts with "failed:")');
+  }
 
   if (missing.length) {
     lines.push('');
@@ -237,6 +243,19 @@ function menuCoverage() {
     SpreadsheetApp.getUi().alert('Coverage', msg, SpreadsheetApp.getUi().ButtonSet.OK);
   } catch (e) { /* no UI when run from the editor */ }
   return msg;
+}
+
+/** Messages examined but never classified — a bad response, not a missed email. */
+function countUnclassified_() {
+  var sheet = getSheet_(TABS.PROCESSED);
+  var last = sheet.getLastRow();
+  if (last < 2) return 0;
+
+  var count = 0;
+  sheet.getRange(2, P_ACTION + 1, last - 1, 1).getValues().forEach(function (r) {
+    if (String(r[0]).indexOf('failed:') === 0) count++;
+  });
+  return count;
 }
 
 /** The earliest message either log has a record of examining. */

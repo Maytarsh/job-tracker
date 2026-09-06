@@ -144,7 +144,8 @@ function processWindow_(afterEpoch, beforeEpoch, limit) {
     // The oldest one it failed on, which the poll must not step over.
     oldestErrorEpoch: 0,
     outOfTime: false,
-    aborted: ''
+    aborted: '',
+    unclassified: 0
   };
 
   // An outage fails every call, not one. Stopping on the third in a row keeps a
@@ -181,6 +182,22 @@ function processWindow_(afterEpoch, beforeEpoch, limit) {
       consecutiveFailures = 0;
     } catch (err) {
       stats.errors++;
+
+      // A response that cannot be parsed will not parse next time either.
+      // Holding the cursor for it would stop the backfill dead, so record it
+      // and move on — dropped loudly, and counted by the coverage report,
+      // rather than retried forever or lost without trace.
+      if (err && err.permanent) {
+        stats.unclassified++;
+        consecutiveFailures = 0;
+        book.processed.push([
+          msg.id, msg.date, msg.from, msg.subject, '', '', '', '', '',
+          'failed: ' + String(err.message).substring(0, 200)
+        ]);
+        Logger.log('could not classify ' + msg.id + ': ' + err.message);
+        continue;
+      }
+
       consecutiveFailures++;
       if (!stats.oldestErrorEpoch || epoch < stats.oldestErrorEpoch) {
         stats.oldestErrorEpoch = epoch;

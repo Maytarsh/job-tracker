@@ -687,3 +687,26 @@ t('clean short fields survive the check', function () {
   eq(p.hq_location, 'Tel Aviv District, Israel');
   eq(p.employee_range, '1-10');
 });
+
+// -------------------------------------- transient vs permanent API failures
+// A dead API is worth retrying forever. A response that cannot be parsed is
+// not: holding the cursor for it stops the backfill dead, because every chunk
+// rewinds to the same message and never gets past it.
+
+t('an unparseable response is marked permanent', function () {
+  var err = permanentError_('triage response was not valid JSON');
+  ok(err.permanent === true, 'tagged for the caller');
+  ok(err instanceof Error, 'still a real Error');
+});
+
+t('a plain API failure is not permanent, so it keeps its retry', function () {
+  ok(!(new Error('Anthropic API 400: credit balance too low')).permanent,
+     'an outage must not be written off as unclassifiable');
+});
+
+t('a message that could not be classified is not reconsidered forever', function () {
+  ok(!isRetryable_('failed: triage response was truncated at max_tokens'),
+     'retrying it would pin the cursor and stall the window');
+  ok(isRetryable_('error: Exception: sheet write failed'),
+     'a transient write failure still gets another attempt');
+});

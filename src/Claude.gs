@@ -71,8 +71,10 @@ var TRIAGE_SYSTEM =
   'Fill every field. Use "" for anything the email does not state — never invent a company, ' +
   'role, location, or URL. "company" is the hiring employer, not the ATS vendor: an email from ' +
   'Greenhouse on behalf of Wiz has company "Wiz" and source_ats "Greenhouse". "evidence" must ' +
-  'be a short phrase quoted verbatim from the email that justifies the category. Set confidence ' +
-  'to low when the email is ambiguous or the company had to be inferred.';
+  'be a short phrase quoted verbatim from the email that justifies the category — at most ' +
+  'fifteen words, never a whole paragraph. For "job_url" give the bare link to the posting ' +
+  'without tracking parameters; if it only appears as a long redirect, use "" instead. ' +
+  'Set confidence to low when the email is ambiguous or the company had to be inferred.';
 
 /**
  * Built lazily, not as a top-level var: Apps Script evaluates project files in
@@ -106,11 +108,29 @@ function triageSchema_() {
   };
 }
 
+/**
+ * An error this message will hit again on every future run.
+ *
+ * A dead API is transient — hold the cursor and retry. A response that cannot be
+ * parsed is not: retrying it forever pins the backfill cursor and no chunk ever
+ * gets past it. The caller records these and moves on, so the window drains and
+ * the coverage report can account for them.
+ */
+function permanentError_(message) {
+  var err = new Error(message);
+  err.permanent = true;
+  return err;
+}
+
 /** Classify one email. Returns the parsed schema object. */
 function triageMessage_(msg) {
   var res = callAnthropic_({
     model: CONFIG.TRIAGE_MODEL,
-    max_tokens: 1024,
+    // Enough room for the whole JSON object. A LinkedIn job link carries a few
+    // hundred characters of tracking parameters, and at 1024 the response was
+    // cut off mid-string — arriving as an unterminated-JSON SyntaxError rather
+    // than as the truncation it actually was.
+    max_tokens: 2048,
     system: [{
       type: 'text',
       text: TRIAGE_SYSTEM,
@@ -127,9 +147,18 @@ function triageMessage_(msg) {
     output_config: { format: { type: 'json_schema', schema: triageSchema_() } }
   });
 
+  if (res.stop_reason === 'max_tokens') {
+    throw permanentError_('triage response was truncated at max_tokens');
+  }
+
   var block = firstOfType_(res.content, 'text');
-  if (!block) throw new Error('triage returned no text block');
-  return JSON.parse(block.text);
+  if (!block) throw permanentError_('triage returned no text block');
+
+  try {
+    return JSON.parse(block.text);
+  } catch (err) {
+    throw permanentError_('triage response was not valid JSON: ' + err);
+  }
 }
 
 /** Lazy for the same load-order reason as triageSchema_(). */

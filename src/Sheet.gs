@@ -453,6 +453,11 @@ function loadProcessedIds_() {
  * and billed — but never reached the sheet, and used to count as done anyway,
  * so the only trace of the loss was one line in an execution log nobody reads.
  * Both get another attempt; the failed row stays in the log as a record.
+ *
+ * "failed:" is deliberately not in here. That marks a message whose response
+ * could not be parsed, which will happen again on every retry — reconsidering
+ * it forever would stop the window draining. The coverage report counts those
+ * instead, so they are visible rather than silently retried or silently gone.
  */
 function isRetryable_(action) {
   var text = String(action || '');
