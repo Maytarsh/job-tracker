@@ -32,6 +32,11 @@ var CONFIG = {
   RUN_BUDGET_SECONDS: 240,
   ENRICH_RESERVE_SECONDS: 120, // don't start research without this much left
 
+  // Give up on a run once the API has failed this many times in a row. An
+  // expired key or an empty credit balance fails every call, and grinding on
+  // through the window wastes the run and risks stepping over the mail.
+  MAX_CONSECUTIVE_FAILURES: 3,
+
   API_URL: 'https://api.anthropic.com/v1/messages',
   API_VERSION: '2023-06-01',
   API_MAX_ATTEMPTS: 4

@@ -85,10 +85,27 @@ function runBackfill(event) {
   var result = processWindow_(after, before, CONFIG.MAX_MESSAGES_PER_RUN);
   Logger.log('runBackfill: ' + JSON.stringify(result));
 
-  // +1 so messages sharing the oldest timestamp are re-collected rather than
-  // stepped over; the processed-ID set drops the ones already handled.
-  if (result.oldestEpoch) {
-    props.setProperty(PROP_BACKFILL_BEFORE, String(result.oldestEpoch + 1));
+  // The cursor may not pass a message this chunk failed on — the same rule the
+  // poll follows. An outage mid-backfill would otherwise walk the window down
+  // while handling none of it, and every message it stepped over would be in
+  // neither log and behind the cursor. Rewinding to the oldest failure costs a
+  // re-scan of what was already done, which the processed-ID set discards.
+  //
+  // +1 because the window excludes `before` itself, and the message at that
+  // exact second still needs collecting.
+  var cursor = result.oldestErrorEpoch || result.oldestEpoch;
+  if (cursor) props.setProperty(PROP_BACKFILL_BEFORE, String(cursor + 1));
+
+  if (result.aborted) {
+    // No continuation trigger: retrying every minute against a dead API is
+    // pointless. Restarting by hand sweeps the window from the newest end
+    // again, which is cheap — collectMessages_ drops anything already in
+    // _Processed or _Skipped before a single call is made, so a restart costs
+    // Gmail reads and picks up exactly where this stopped.
+    Logger.log('backfill paused: ' + result.aborted +
+               '\nFix that, then run Backfill history again — mail already ' +
+               'handled is skipped, so it carries on from here.');
+    return result;
   }
 
   if (result.hitLimit || result.outOfTime) {
@@ -126,8 +143,13 @@ function processWindow_(afterEpoch, beforeEpoch, limit) {
     oldestEpoch: 0,
     // The oldest one it failed on, which the poll must not step over.
     oldestErrorEpoch: 0,
-    outOfTime: false
+    outOfTime: false,
+    aborted: ''
   };
+
+  // An outage fails every call, not one. Stopping on the third in a row keeps a
+  // dead API from burning through the whole window in a few seconds.
+  var consecutiveFailures = 0;
 
   for (var m = 0; m < messages.length; m++) {
     var msg = messages[m];
@@ -156,12 +178,22 @@ function processWindow_(afterEpoch, beforeEpoch, limit) {
     try {
       triage = triageMessage_(msg);
       stats.triaged++;
+      consecutiveFailures = 0;
     } catch (err) {
       stats.errors++;
+      consecutiveFailures++;
       if (!stats.oldestErrorEpoch || epoch < stats.oldestErrorEpoch) {
         stats.oldestErrorEpoch = epoch;
       }
       Logger.log('triage failed for ' + msg.id + ': ' + err);
+      if (consecutiveFailures >= CONFIG.MAX_CONSECUTIVE_FAILURES) {
+        stats.aborted = String(err).substring(0, 200);
+        Logger.log('stopping this run: ' + consecutiveFailures +
+                   ' API failures in a row. Nothing is lost — the messages have ' +
+                   'no _Processed row, so they are picked up again once the ' +
+                   'API works.');
+        break;
+      }
       continue;  // no _Processed row, so it retries next run
     }
 
