@@ -23,8 +23,61 @@ function apiKey_() {
   return key;
 }
 
-/** POST to the Messages API, retrying 429s and 5xxs with exponential backoff. */
+var PROP_SPEND_DAY = 'SPEND_DAY';
+var PROP_SPEND_USD = 'SPEND_USD';
+
+/**
+ * What today's calls have cost, in dollars. Rolls over on its own at UTC
+ * midnight, so there is nothing to reset by hand.
+ */
+function spendToday_() {
+  var props = PropertiesService.getScriptProperties();
+  var today = new Date().toISOString().substring(0, 10);
+  if (props.getProperty(PROP_SPEND_DAY) !== today) {
+    props.setProperty(PROP_SPEND_DAY, today);
+    props.setProperty(PROP_SPEND_USD, '0');
+    return 0;
+  }
+  return Number(props.getProperty(PROP_SPEND_USD)) || 0;
+}
+
+/** Price one response from its own usage and add it to the day's total. */
+function recordSpend_(model, usage) {
+  var price = CONFIG.PRICE_PER_MTOK[model];
+  if (!price || !usage) return 0;
+
+  var input = (usage.input_tokens || 0) +
+              (usage.cache_read_input_tokens || 0) +
+              (usage.cache_creation_input_tokens || 0);
+  var searches = (usage.server_tool_use || {}).web_search_requests || 0;
+  var cost = input * price.input / 1e6 +
+             (usage.output_tokens || 0) * price.output / 1e6 +
+             searches * CONFIG.PRICE_PER_SEARCH;
+
+  var total = spendToday_() + cost;
+  PropertiesService.getScriptProperties().setProperty(PROP_SPEND_USD, String(total));
+  return cost;
+}
+
+/**
+ * POST to the Messages API, retrying 429s and 5xxs with exponential backoff.
+ *
+ * The budget is checked here rather than at the call sites on purpose: this is
+ * the only place a request can leave the script, so no future caller — a new
+ * menu item, a retry loop, a self-healing pass — can spend past the ceiling by
+ * forgetting to ask.
+ */
 function callAnthropic_(payload) {
+  var spent = spendToday_();
+  if (spent >= CONFIG.DAILY_BUDGET_USD) {
+    throw new Error(
+      'daily budget reached: $' + spent.toFixed(2) + ' of $' +
+      CONFIG.DAILY_BUDGET_USD.toFixed(2) + ' spent today. No further API calls ' +
+      'until UTC midnight. Raise CONFIG.DAILY_BUDGET_USD or clear the SPEND_USD ' +
+      'script property to resume sooner.'
+    );
+  }
+
   var options = {
     method: 'post',
     contentType: 'application/json',
@@ -42,7 +95,11 @@ function callAnthropic_(payload) {
     var code = res.getResponseCode();
     lastBody = res.getContentText();
 
-    if (code === 200) return JSON.parse(lastBody);
+    if (code === 200) {
+      var parsed = JSON.parse(lastBody);
+      recordSpend_(payload.model, parsed.usage);
+      return parsed;
+    }
 
     var retryable = (code === 429 || code === 408 || code >= 500);
     if (!retryable || attempt === CONFIG.API_MAX_ATTEMPTS) {
@@ -245,7 +302,14 @@ function enrichCompany_(companyName, hintUrl, locationHint) {
       // Search snippets alone are what produced the aggregator answer for Algorio.
       // web_fetch lets the model read the company's own site before profiling it. It
       // can only fetch URLs already in the conversation — i.e. ones search returned.
-      { type: 'web_fetch_20260209', name: 'web_fetch', max_uses: CONFIG.ENRICH_MAX_FETCHES },
+      {
+        type: 'web_fetch_20260209', name: 'web_fetch',
+        max_uses: CONFIG.ENRICH_MAX_FETCHES,
+        // Without this the whole page enters the conversation and is re-sent as
+        // input on every following turn. One uncapped fetch of a heavy site cost
+        // more than the rest of a run put together.
+        max_content_tokens: CONFIG.ENRICH_MAX_FETCH_TOKENS
+      },
       companyTool_()
     ],
     tool_choice: { type: 'auto' }
@@ -262,7 +326,7 @@ function enrichCompany_(companyName, hintUrl, locationHint) {
     (serverTools.web_search_requests || 0) + ' search(es), ' +
     (serverTools.web_fetch_requests || 0) + ' fetch(es), ' +
     (usage.input_tokens || 0) + ' in / ' + (usage.output_tokens || 0) + ' out, ' +
-    'stop=' + res.stop_reason
+    'stop=' + res.stop_reason + ', $' + spendToday_().toFixed(2) + ' today'
   );
 
   var content = res.content || [];

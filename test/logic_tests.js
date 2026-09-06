@@ -710,3 +710,87 @@ t('a message that could not be classified is not reconsidered forever', function
   ok(isRetryable_('error: Exception: sheet write failed'),
      'a transient write failure still gets another attempt');
 });
+
+// ------------------------------------------------------------ spend ceiling
+// An uncapped web_fetch put a whole page into the conversation, where it was
+// re-sent as input on every following turn. One company reached dollars. The
+// ceiling is the backstop for whatever the next such mistake turns out to be.
+function withProps(store, fn) {
+  var original = PropertiesService;
+  PropertiesService = {
+    getScriptProperties: function () {
+      return {
+        getProperty: function (k) { return k in store ? store[k] : null; },
+        setProperty: function (k, v) { store[k] = String(v); },
+        deleteProperty: function (k) { delete store[k]; }
+      };
+    }
+  };
+  try { return fn(); } finally { PropertiesService = original; }
+}
+
+t('a response is priced from its own usage', function () {
+  var store = {};
+  withProps(store, function () {
+    var cost = recordSpend_('claude-opus-5', {
+      input_tokens: 200000, output_tokens: 1000,
+      server_tool_use: { web_search_requests: 3 }
+    });
+    // 200k in at $5/MTok = $1.00, 1k out at $25/MTok = $0.025, 3 searches = $0.03
+    ok(Math.abs(cost - 1.055) < 0.001, 'got ' + cost);
+    ok(Math.abs(spendToday_() - 1.055) < 0.001, 'added to the running total');
+  });
+});
+
+t('cached input is counted, not billed as free', function () {
+  withProps({}, function () {
+    var cost = recordSpend_('claude-haiku-4-5', {
+      input_tokens: 1000, cache_read_input_tokens: 1000,
+      cache_creation_input_tokens: 1000, output_tokens: 0
+    });
+    ok(Math.abs(cost - 0.003) < 0.0001, 'the ceiling errs high, got ' + cost);
+  });
+});
+
+t('spend rolls over to zero on a new day', function () {
+  var store = { SPEND_DAY: '2020-01-01', SPEND_USD: '99' };
+  withProps(store, function () {
+    eq(spendToday_(), 0, 'yesterday does not count against today');
+    eq(store.SPEND_USD, '0');
+  });
+});
+
+t('no request leaves the script once the day is over budget', function () {
+  var store = {
+    SPEND_DAY: new Date().toISOString().substring(0, 10),
+    SPEND_USD: String(CONFIG.DAILY_BUDGET_USD)
+  };
+  var fetched = false;
+  var originalFetch = UrlFetchApp;
+  UrlFetchApp = { fetch: function () { fetched = true; throw new Error('should not run'); } };
+  try {
+    withProps(store, function () {
+      var threw = '';
+      try { callAnthropic_({ model: 'claude-opus-5' }); }
+      catch (e) { threw = String(e.message); }
+      ok(threw.indexOf('daily budget reached') !== -1, 'refused: ' + threw);
+      ok(!fetched, 'the request was never sent');
+    });
+  } finally { UrlFetchApp = originalFetch; }
+});
+
+t('an unpriced model cannot silently escape the ledger', function () {
+  withProps({}, function () {
+    eq(recordSpend_('some-future-model', { input_tokens: 1e6 }), 0);
+    ok(CONFIG.PRICE_PER_MTOK[CONFIG.TRIAGE_MODEL], 'triage model is priced');
+    ok(CONFIG.PRICE_PER_MTOK[CONFIG.ENRICH_MODEL], 'enrich model is priced');
+  });
+});
+
+t('a fetched page is capped before it enters the conversation', function () {
+  var tools = captureEnrichPayload_('Algorio', '', 'Tel Aviv').tools;
+  var fetch = tools.filter(function (x) { return x.type === 'web_fetch_20260209'; })[0];
+  ok(fetch, 'web fetch is declared');
+  eq(fetch.max_content_tokens, CONFIG.ENRICH_MAX_FETCH_TOKENS);
+  ok(fetch.max_content_tokens > 0, 'an uncapped fetch is what caused this');
+});

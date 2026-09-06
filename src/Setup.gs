@@ -215,6 +215,8 @@ function menuCoverage() {
     oldest
       ? 'Mail examined back to: ' + oldest.toDateString()
       : 'No mail examined yet — run Backfill history.',
+    'Spent today: $' + spendToday_().toFixed(2) +
+      ' of $' + CONFIG.DAILY_BUDGET_USD.toFixed(2),
     'Application rows: ' + book.rows.length,
     'Rows still missing a Market: ' + blanks +
       (blanks ? ' (Fill in missing company profiles)' : '')

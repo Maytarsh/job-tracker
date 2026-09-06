@@ -63,6 +63,20 @@ complete, and nothing anywhere says otherwise. Three rules hold the line.
   never swept is indistinguishable from a window with no job mail in it. `menuCoverage`
   is what tells them apart — it reports the oldest message either log has examined.
 
+## Spending
+
+`callAnthropic_()` is the only place a request leaves the script, so the daily ceiling
+is enforced there rather than at the call sites — a new menu item or self-healing pass
+cannot spend past it by forgetting to ask. Every response is priced from its own
+`usage` into `SPEND_USD`, which rolls over at UTC midnight.
+
+The cost of a call is dominated by what the server tools drag into the conversation,
+not by the prompt. A `web_fetch` without `max_content_tokens` puts a whole page in
+context, where it is re-sent as input on every following turn of the tool loop — that
+alone took one company's research from cents to dollars. Cap anything that can pull
+unbounded content in, and check the `enriched …` log line, which prints tokens,
+searches, fetches and the running daily total.
+
 ## Testing
 
 ```bash
