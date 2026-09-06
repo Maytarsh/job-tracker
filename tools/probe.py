@@ -3,7 +3,7 @@
 
 Sends two real requests with ANTHROPIC_API_KEY from the environment:
   1. Triage   - claude-haiku-4-5 + output_config.format (json_schema)
-  2. Enrich   - claude-opus-5 + web_search server tool + strict tool use
+  2. Enrich   - claude-opus-5 + web_search/web_fetch server tools + strict tool use
 
 Stdlib only, deliberately - do not reach for `requests` here. Two properties depend
 on it: the payloads mirror exactly what UrlFetchApp sends from Apps Script, which has
@@ -142,30 +142,35 @@ def probe_triage():
     return u
 
 
-def probe_enrich(company="Wiz"):
+def probe_enrich(company="Wiz", location=""):
     print("\n" + "=" * 70)
-    print("PROBE 2 — enrich: claude-opus-5 + web_search + strict tool use")
+    print("PROBE 2 — enrich: claude-opus-5 + web_search/web_fetch + strict tool use")
     print("=" * 70)
     res = call({
         "model": "claude-opus-5",
-        "max_tokens": 4096,
+        "max_tokens": 8192,
         "system": (
             "You research one company and record its profile. Search the web to confirm "
             "what the company actually builds — do not rely on memory. Then call "
-            "save_company_profile exactly once. If you cannot confidently identify the "
-            "company, set market to \"Unknown\" and say so in description rather than "
+            "save_company_profile exactly once. A company name on its own is often "
+            "ambiguous, so search it together with the hiring location and the likely "
+            "domains, and fetch the company's own site when a result looks right — a "
+            "primary source outranks any aggregator listing. Only if that genuinely "
+            "fails, set market to \"Unknown\" and say so in description rather than "
             "guessing. Keep description to 1-2 sentences naming the product and who buys it."
         ),
         "messages": [{
             "role": "user",
             "content": (
                 f"Company: {company}\n"
-                "Context: seen as the sender of a job application confirmation email.\n"
+                + (f"Hiring location: {location}\n" if location else "")
+                + "Context: seen as the sender of a job application confirmation email.\n"
                 "Research it and record the profile."
             ),
         }],
         "tools": [
-            {"type": "web_search_20260209", "name": "web_search", "max_uses": 4},
+            {"type": "web_search_20260209", "name": "web_search", "max_uses": 6},
+            {"type": "web_fetch_20260209", "name": "web_fetch", "max_uses": 3},
             COMPANY_TOOL,
         ],
         "tool_choice": {"type": "auto"},
@@ -181,7 +186,8 @@ def probe_enrich(company="Wiz"):
     print("\n" + json.dumps(calls[-1]["input"], indent=2))
     u = res["usage"]
     print(f"\nusage: in={u['input_tokens']} out={u['output_tokens']} "
-          f"web_search={u.get('server_tool_use', {}).get('web_search_requests', 0)}")
+          f"web_search={u.get('server_tool_use', {}).get('web_search_requests', 0)} "
+          f"web_fetch={u.get('server_tool_use', {}).get('web_fetch_requests', 0)}")
     return u
 
 
@@ -189,7 +195,12 @@ if __name__ == "__main__":
     if not KEY:
         sys.exit("ANTHROPIC_API_KEY is not set")
     t = probe_triage()
-    e = probe_enrich(sys.argv[1] if len(sys.argv) > 1 else "Wiz")
+    # Second argument is the hiring location, the hint that disambiguates a name
+    # like "Algorio" from the unrelated businesses sharing it.
+    e = probe_enrich(
+        sys.argv[1] if len(sys.argv) > 1 else "Wiz",
+        sys.argv[2] if len(sys.argv) > 2 else "",
+    )
     if t and e:
         # haiku 4.5: $1/$5 per MTok ; opus 5: $5/$25 per MTok
         tri = (t["input_tokens"] * 1 + t["output_tokens"] * 5) / 1e6

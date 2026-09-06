@@ -97,7 +97,13 @@ function openBook_() {
   };
 }
 
-/** One flush per run: changed rows, then every append. */
+/**
+ * One flush per run: changed rows, then every append, then the derived column.
+ *
+ * The per-row assignment below is not redundant with refreshQuietColumn_: getValues()
+ * returns a formula cell's computed *value*, so a row loaded from the sheet carries
+ * the number 0.32, and writing it back unchanged would replace the formula with it.
+ */
 function flushBook_(book) {
   var width = APP_HEADERS.length;
 
@@ -117,6 +123,7 @@ function flushBook_(book) {
       .setValues(book.appended);
   }
 
+  refreshQuietColumn_(book.appSheet);
   appendRows_(TABS.COMPANIES, book.newCompanies);
   appendRows_(TABS.PROCESSED, book.processed);
   appendRows_(TABS.SKIPPED, book.skipped);
@@ -129,10 +136,33 @@ function appendRows_(tabName, rows) {
     .setValues(rows);
 }
 
-/** Blank while Closed or undated, so the column only shows what's actually waiting. */
+/**
+ * Rewrite Days quiet across every row, not just the ones being written.
+ *
+ * The column is derived state the automation owns outright — nothing a person types
+ * there survives a flush anyway — so writing it wholesale costs one batched call and
+ * means a change to quietFormula_ reaches every existing row on the next run, rather
+ * than waiting for an email to touch each one individually.
+ */
+function refreshQuietColumn_(sheet) {
+  var last = sheet.getLastRow();
+  if (last < 2) return;
+
+  var formulas = [];
+  for (var row = 2; row <= last; row++) formulas.push([quietFormula_(row)]);
+  sheet.getRange(2, A_QUIET + 1, formulas.length, 1).setValues(formulas);
+}
+
+/**
+ * Blank while Closed or undated, so the column only shows what's actually waiting.
+ *
+ * INT() around the timestamp because Last update carries the email's time of day
+ * while TODAY() is midnight — subtracting them directly renders 0.3251041 instead
+ * of a day count.
+ */
 function quietFormula_(rowNumber) {
   return '=IF(OR($E' + rowNumber + '="Closed",$H' + rowNumber + '=""),"",' +
-         'TODAY()-$H' + rowNumber + ')';
+         'TODAY()-INT($H' + rowNumber + '))';
 }
 
 /** Strip legal suffixes and punctuation so "Wiz, Inc." and "Wiz" are one company. */
@@ -169,7 +199,7 @@ function loadCompanyCache_() {
  * Failures are cached as Unknown too — one bad lookup shouldn't re-bill Opus
  * on every subsequent email from that company.
  */
-function companyProfile_(book, companyName, hintUrl) {
+function companyProfile_(book, companyName, hintUrl, locationHint) {
   var key = normalizeCompany_(companyName);
   if (!key) return { market: '', description: '' };
   if (book.companies[key]) return book.companies[key];
@@ -180,7 +210,7 @@ function companyProfile_(book, companyName, hintUrl) {
   var profile;
   try {
     book.enrichCount++;
-    profile = sanitizeProfile_(enrichCompany_(companyName, hintUrl));
+    profile = sanitizeProfile_(enrichCompany_(companyName, hintUrl, locationHint));
   } catch (err) {
     Logger.log('enrich failed for ' + companyName + ': ' + err);
     profile = null;
@@ -286,7 +316,7 @@ function upsertApplication_(book, triage, msg) {
     if (!row[A_LOCATION] && triage.location) row[A_LOCATION] = safeCell_(triage.location, 120);
     if (!row[A_ATS] && triage.source_ats) row[A_ATS] = safeCell_(triage.source_ats, 60);
     if (!row[A_MARKET]) {
-      var refreshed = companyProfile_(book, triage.company, triage.job_url);
+      var refreshed = companyProfile_(book, triage.company, triage.job_url, triage.location);
       row[A_MARKET] = safeCell_(refreshed.market, 40);
       row[A_DESC] = safeCell_(refreshed.description, 600);
     }
@@ -299,7 +329,7 @@ function upsertApplication_(book, triage, msg) {
     return 'updated ' + row[A_COMPANY] + ' -> ' + row[A_STAGE] + '/' + row[A_STATUS];
   }
 
-  var profile = companyProfile_(book, triage.company, triage.job_url);
+  var profile = companyProfile_(book, triage.company, triage.job_url, triage.location);
   var fresh = new Array(APP_HEADERS.length).fill('');
   fresh[A_COMPANY] = safeCell_(triage.company, 120);
   fresh[A_ROLE] = safeCell_(triage.role, 200);
