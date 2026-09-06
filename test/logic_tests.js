@@ -656,3 +656,34 @@ t('filling in stops at the per-run cap instead of blanking rows', function () {
        'rows past the cap are left blank, not overwritten');
   } finally { enrichCompany_ = original; }
 });
+
+t('no profile field is exempt from the degeneracy check', function () {
+  // Founded came back as tool-call scaffolding once, truncated to ten
+  // characters by safeCell_ and looking like a parsing quirk in the sheet.
+  var junk = '</antml:parameter>';
+  var p = sanitizeProfile_({
+    market: 'Fintech',
+    description: 'Algorio builds algorithmic trading infrastructure for trading firms.',
+    sub_market: junk, website: junk,
+    hq_location: junk, employee_range: junk, founded_year: junk
+  });
+  eq(p.founded_year, '', 'founded_year is screened');
+  eq(p.hq_location, '', 'hq_location is screened');
+  eq(p.employee_range, '', 'employee_range is screened');
+  eq(p.sub_market, '');
+  eq(p.website, '');
+  eq(p.market, 'Fintech', 'a clean description still stands');
+});
+
+t('clean short fields survive the check', function () {
+  var p = sanitizeProfile_({
+    market: 'Fintech',
+    description: 'Algorio builds algorithmic trading infrastructure for trading firms.',
+    sub_market: 'algorithmic trading', website: 'https://algor.io',
+    hq_location: 'Tel Aviv District, Israel', employee_range: '1-10',
+    founded_year: '2024'
+  });
+  eq(p.founded_year, '2024');
+  eq(p.hq_location, 'Tel Aviv District, Israel');
+  eq(p.employee_range, '1-10');
+});

@@ -43,9 +43,22 @@ function looksDegenerate_(text) {
   return /<\/?[a-z_:]+[^>]*>|parameter name=|antml|\bfunction_calls\b/i.test(text);
 }
 
+/** Free text from the model, or nothing. Every string field goes through this. */
+function cleanField_(value) {
+  var text = String(value || '');
+  return looksDegenerate_(text) ? '' : text;
+}
+
 /**
  * A schema guarantees the shape of the enrichment result, never the sanity of
  * its free text. Drop anything that came back malformed rather than writing it.
+ *
+ * Every string field, not a chosen few: hq_location, employee_range and
+ * founded_year were once passed through raw on the assumption that a short,
+ * factual-sounding field could not come back as scaffolding. One did —
+ * "</p…" landed in Founded, truncated to ten characters by safeCell_ and
+ * looking for all the world like a parsing quirk. A schema constrains shape,
+ * never content, so nothing the model writes is exempt from this.
  */
 function sanitizeProfile_(profile) {
   if (!profile) return null;
@@ -61,12 +74,12 @@ function sanitizeProfile_(profile) {
 
   return {
     market: market,
-    sub_market: looksDegenerate_(profile.sub_market) ? '' : (profile.sub_market || ''),
+    sub_market: cleanField_(profile.sub_market),
     description: description,
-    website: looksDegenerate_(profile.website) ? '' : (profile.website || ''),
-    hq_location: profile.hq_location || '',
-    employee_range: profile.employee_range || '',
-    founded_year: profile.founded_year || ''
+    website: cleanField_(profile.website),
+    hq_location: cleanField_(profile.hq_location),
+    employee_range: cleanField_(profile.employee_range),
+    founded_year: cleanField_(profile.founded_year)
   };
 }
 
