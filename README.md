@@ -108,7 +108,7 @@ The 30-minute trigger keeps it current from then on.
 | Status | `Open` until a rejection arrives, then `Closed` |
 | Stage | Applied → Screening → Interview → Offer → Rejected → Ghosted |
 | Date applied, Last update | from the emails |
-| Days quiet | formula; blank once closed |
+| Days quiet | formula, rewritten across every row each run; blank once closed |
 | Email link | back to the original Gmail thread |
 | Confidence | `low` = worth checking. Also set when a row match had to be guessed |
 | **Notes** | **yours — the automation never reads or writes this column** |

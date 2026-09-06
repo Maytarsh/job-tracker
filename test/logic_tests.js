@@ -170,6 +170,34 @@ t('the quiet-days formula is blank for closed rows', function () {
   ok(quietFormula_(5).indexOf('TODAY()-INT($H5)') !== -1, 'counts from last update');
 });
 
+t('every row gets the current quiet formula, not just the written ones', function () {
+  // Otherwise a fix to quietFormula_ only reaches a row when an email next
+  // touches it, and the rest of the sheet keeps the old formula indefinitely.
+  var written = null;
+  var sheet = {
+    getLastRow: function () { return 4; },
+    getRange: function (row, col, numRows, numCols) {
+      written = { row: row, col: col, numRows: numRows, numCols: numCols };
+      return { setValues: function (values) { written.values = values; } };
+    }
+  };
+  refreshQuietColumn_(sheet);
+  eq(written.col, A_QUIET + 1, 'targets the Days quiet column');
+  eq(written.row, 2, 'starts below the header');
+  eq(written.numRows, 3, 'covers every data row');
+  eq(written.values[0][0], quietFormula_(2));
+  eq(written.values[2][0], quietFormula_(4), 'each row gets its own row number');
+});
+
+t('refreshing an empty sheet writes nothing', function () {
+  var touched = false;
+  refreshQuietColumn_({
+    getLastRow: function () { return 1; },
+    getRange: function () { touched = true; return { setValues: function () {} }; }
+  });
+  ok(!touched, 'a header-only sheet is left alone');
+});
+
 t('the quiet-days formula counts whole days', function () {
   // Last update is a timestamp, TODAY() is midnight; without INT() the column
   // renders a fraction like 0.3251041 instead of a day count.

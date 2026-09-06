@@ -97,7 +97,13 @@ function openBook_() {
   };
 }
 
-/** One flush per run: changed rows, then every append. */
+/**
+ * One flush per run: changed rows, then every append, then the derived column.
+ *
+ * The per-row assignment below is not redundant with refreshQuietColumn_: getValues()
+ * returns a formula cell's computed *value*, so a row loaded from the sheet carries
+ * the number 0.32, and writing it back unchanged would replace the formula with it.
+ */
 function flushBook_(book) {
   var width = APP_HEADERS.length;
 
@@ -117,6 +123,7 @@ function flushBook_(book) {
       .setValues(book.appended);
   }
 
+  refreshQuietColumn_(book.appSheet);
   appendRows_(TABS.COMPANIES, book.newCompanies);
   appendRows_(TABS.PROCESSED, book.processed);
   appendRows_(TABS.SKIPPED, book.skipped);
@@ -127,6 +134,23 @@ function appendRows_(tabName, rows) {
   var sheet = getSheet_(tabName);
   sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, rows[0].length)
     .setValues(rows);
+}
+
+/**
+ * Rewrite Days quiet across every row, not just the ones being written.
+ *
+ * The column is derived state the automation owns outright — nothing a person types
+ * there survives a flush anyway — so writing it wholesale costs one batched call and
+ * means a change to quietFormula_ reaches every existing row on the next run, rather
+ * than waiting for an email to touch each one individually.
+ */
+function refreshQuietColumn_(sheet) {
+  var last = sheet.getLastRow();
+  if (last < 2) return;
+
+  var formulas = [];
+  for (var row = 2; row <= last; row++) formulas.push([quietFormula_(row)]);
+  sheet.getRange(2, A_QUIET + 1, formulas.length, 1).setValues(formulas);
 }
 
 /**
