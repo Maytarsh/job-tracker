@@ -6,7 +6,7 @@ still alive. Runs unattended in Google Apps Script; no server, nothing to instal
 
 ```
 Time trigger (30 min) ─▶ pollInbox()
-   collect  →  prefilter  →  triage (Haiku)  →  enrich (Opus + web search)  →  upsert
+   collect  →  prefilter  →  triage (Haiku)  →  enrich (Opus + web search/fetch)  →  upsert
 Daily trigger ────────▶ markStale()   Open + silent 30 days → Ghosted
 ```
 
@@ -114,7 +114,9 @@ The 30-minute trigger keeps it current from then on.
 | **Notes** | **yours — the automation never reads or writes this column** |
 
 **`Companies`** caches one researched profile per company, so Opus is called once per
-company ever.
+company ever. The Location from the email is passed into that research: a small
+company's name on its own is often ambiguous, and the hiring location is usually what
+separates it from the unrelated businesses sharing the name.
 
 ## Re-testing on real emails
 
@@ -127,7 +129,9 @@ No need to send yourself test mail — replay the ones you already have:
   days untouched, then let the trigger pick them up on its own — exercising the
   incremental window, the dedupe set, and the trigger together on real mail.
 - **Job Tracker → Re-research selected companies** re-runs enrichment for the selected
-  rows if a Market or Description came out wrong.
+  rows if a Market or Description came out wrong. `MAX_ENRICH_PER_RUN` caps how many
+  companies one click researches; past the cap it stops and says so, leaving the
+  remaining rows untouched rather than blanking them.
 
 Skipped mail is recorded by message ID, so a backfill window actually drains — without
 that, every chunk re-collects the same non-job mail and the continuation trigger
@@ -165,7 +169,7 @@ patterns or the triage prompt — and want to see the new output before it reach
 ## Cost
 
 Triage is `claude-haiku-4-5` per candidate email; enrichment is `claude-opus-5` with
-web search, once per company. Expect a few dollars for the initial backfill (mostly
+web search and web fetch, once per company. Expect a few dollars for the initial backfill (mostly
 one-time enrichment), then pennies per day. `tools/probe.py` prints real numbers.
 
 ## Development
@@ -175,7 +179,7 @@ there is nothing to install by hand — `uv run` builds the environment from `uv
 first use.
 
 ```bash
-uv run python tools/probe.py [Company]   # one real triage + one real enrichment call
+uv run python tools/probe.py [Company] [Location]   # one real triage + one real enrich
 uv run python test/run_tests.py          # logic suite (needs Firefox)
 ```
 
@@ -201,8 +205,8 @@ of it is treated as attacker-influenceable:
   a crafted company name could run `HYPERLINK`/`IMPORTXML` in your spreadsheet.
   `safeCell_()` prefixes an apostrophe to force those to stay text, strips control
   characters, and caps length.
-- **Prompt injection.** The company name and job URL passed to the enrichment call were
-  extracted from an email. They are fenced in markers and the model is told the content
+- **Prompt injection.** The company name, location and job URL passed to the enrichment
+  call were extracted from an email. They are fenced in markers and the model is told the content
   is untrusted data to look up, not instructions to follow.
 - **Degenerate output.** `strict: true` guarantees the *shape* of the enrichment result,
   never the sanity of its free text. `sanitizeProfile_()` rejects descriptions

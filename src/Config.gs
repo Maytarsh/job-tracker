@@ -22,6 +22,8 @@ var CONFIG = {
   MAX_BODY_CHARS: 4000,     // truncation before the email is sent to the API
 
   MAX_ENRICH_PER_RUN: 15,   // cap Opus calls per execution (cost + runtime guard)
+  ENRICH_MAX_SEARCHES: 6,   // web_search calls the research model may make per company
+  ENRICH_MAX_FETCHES: 3,    // pages it may open to read a company's own site
   MAX_BACKFILL_CHUNKS: 40,  // hard stop on self-requeueing, whatever goes wrong
 
   API_URL: 'https://api.anthropic.com/v1/messages',

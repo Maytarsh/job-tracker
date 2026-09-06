@@ -123,6 +123,7 @@ function menuReEnrichSelected() {
     ? companySheet.getRange(2, 1, companySheet.getLastRow() - 1, 1).getValues()
     : [];
   var done = 0;
+  var capped = false;
 
   for (var r = sel.getRow(); r < sel.getRow() + sel.getNumRows(); r++) {
     var idx = r - 2;
@@ -139,15 +140,32 @@ function menuReEnrichSelected() {
     }
     delete book.companies[key];
 
-    var profile = companyProfile_(book, name, book.rows[idx][A_JOB_URL]);
-    book.rows[idx][A_MARKET] = profile.market;
-    book.rows[idx][A_DESC] = profile.description;
+    var profile = companyProfile_(
+      book, name, book.rows[idx][A_JOB_URL], book.rows[idx][A_LOCATION]);
+
+    // An empty profile means MAX_ENRICH_PER_RUN was reached, not that the
+    // research came back blank. The poll can absorb that — it only fills an
+    // empty Market — but here it would overwrite a Market and Description that
+    // are already on the row, so stop rather than erase them.
+    if (!profile.market && !profile.description) {
+      capped = true;
+      Logger.log('re-research stopped after ' + done +
+                 ' row(s): MAX_ENRICH_PER_RUN reached');
+      break;
+    }
+
+    // Same treatment as every other write: the description is model free text.
+    book.rows[idx][A_MARKET] = safeCell_(profile.market, 40);
+    book.rows[idx][A_DESC] = safeCell_(profile.description, 600);
     book.dirty[idx] = true;
     done++;
+    Logger.log('re-researched ' + name + ' -> ' + profile.market);
   }
 
   flushBook_(book);
-  toast_('Re-researched ' + done + ' company row(s).');
+  Logger.log('menuReEnrichSelected: ' + done + ' row(s) re-researched');
+  toast_('Re-researched ' + done + ' company row(s).' +
+         (capped ? ' Hit the per-run cap — select the rest and run again.' : ''));
 }
 
 /**

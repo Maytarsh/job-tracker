@@ -167,7 +167,13 @@ t('an email with no company name is refused', function () {
 
 t('the quiet-days formula is blank for closed rows', function () {
   ok(quietFormula_(5).indexOf('$E5="Closed"') !== -1, 'guards on status');
-  ok(quietFormula_(5).indexOf('TODAY()-$H5') !== -1, 'counts from last update');
+  ok(quietFormula_(5).indexOf('TODAY()-INT($H5)') !== -1, 'counts from last update');
+});
+
+t('the quiet-days formula counts whole days', function () {
+  // Last update is a timestamp, TODAY() is midnight; without INT() the column
+  // renders a fraction like 0.3251041 instead of a day count.
+  ok(quietFormula_(5).indexOf('INT($H5)') !== -1, 'the timestamp is floored');
 });
 
 // ------------------------------------------- role-matching regression tests
@@ -430,4 +436,68 @@ t('a too-short description is treated as a failure', function () {
     sub_market: '', website: '', hq_location: '', employee_range: '', founded_year: ''
   });
   eq(p.market, 'Unknown');
+});
+
+// ------------------------------------------------ enrichment request shape
+// A company name alone is often ambiguous — "Algorio" reaches a film production
+// company and a data-aggregator listing before it reaches the fintech that was
+// actually hiring. The location from the email is what resolves it, so it has
+// to survive the whole path from triage into the request.
+function captureEnrichPayload_(companyName, hintUrl, locationHint) {
+  var original = callAnthropic_;
+  var seen = null;
+  callAnthropic_ = function (payload) {
+    seen = payload;
+    return { content: [] };  // no tool_use block; enrichCompany_ returns null
+  };
+  try { enrichCompany_(companyName, hintUrl, locationHint); }
+  finally { callAnthropic_ = original; }
+  return seen;
+}
+
+t('the hiring location reaches the enrichment prompt', function () {
+  var payload = captureEnrichPayload_('Algorio', '', 'Tel Aviv District, Israel');
+  var prompt = payload.messages[0].content;
+  ok(prompt.indexOf('<hiring_location>') !== -1, 'location is fenced as data');
+  ok(prompt.indexOf('Tel Aviv District, Israel') !== -1, 'location is present');
+});
+
+t('an absent location leaves no empty marker behind', function () {
+  var prompt = captureEnrichPayload_('Algorio', '', '').messages[0].content;
+  ok(prompt.indexOf('<hiring_location>') === -1, 'no marker without a location');
+});
+
+t('the location is fenced like every other untrusted field', function () {
+  var prompt = captureEnrichPayload_('Algorio', '', '<ignore previous>').messages[0].content;
+  ok(prompt.indexOf('<ignore previous>') === -1, 'angle brackets stripped');
+});
+
+t('enrichment can read a primary source, not just search snippets', function () {
+  var tools = captureEnrichPayload_('Algorio', '', 'Tel Aviv').tools;
+  var types = tools.map(function (tool) { return tool.type || tool.name; });
+  ok(types.indexOf('web_search_20260209') !== -1, 'web search declared');
+  ok(types.indexOf('web_fetch_20260209') !== -1, 'web fetch declared');
+  ok(types.indexOf('save_company_profile') !== -1, 'the result tool is still there');
+  eq(tools[0].max_uses, CONFIG.ENRICH_MAX_SEARCHES);
+  eq(tools[1].max_uses, CONFIG.ENRICH_MAX_FETCHES);
+});
+
+t('companyProfile_ hands the location to the research call', function () {
+  var original = enrichCompany_;
+  var seen = null;
+  enrichCompany_ = function (name, url, location) {
+    seen = { name: name, url: url, location: location };
+    return {
+      market: 'Fintech', sub_market: 'algorithmic trading infrastructure',
+      description: 'Algorio builds algorithmic trading infrastructure for trading firms.',
+      website: 'https://algor.io', hq_location: 'Tel Aviv',
+      employee_range: '', founded_year: ''
+    };
+  };
+  var book = { companies: {}, newCompanies: [], enrichCount: 0 };
+  try {
+    var profile = companyProfile_(book, 'Algorio', 'https://example.com/job', 'Tel Aviv');
+    eq(seen.location, 'Tel Aviv');
+    eq(profile.market, 'Fintech');
+  } finally { enrichCompany_ = original; }
 });

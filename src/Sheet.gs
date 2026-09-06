@@ -129,10 +129,16 @@ function appendRows_(tabName, rows) {
     .setValues(rows);
 }
 
-/** Blank while Closed or undated, so the column only shows what's actually waiting. */
+/**
+ * Blank while Closed or undated, so the column only shows what's actually waiting.
+ *
+ * INT() around the timestamp because Last update carries the email's time of day
+ * while TODAY() is midnight — subtracting them directly renders 0.3251041 instead
+ * of a day count.
+ */
 function quietFormula_(rowNumber) {
   return '=IF(OR($E' + rowNumber + '="Closed",$H' + rowNumber + '=""),"",' +
-         'TODAY()-$H' + rowNumber + ')';
+         'TODAY()-INT($H' + rowNumber + '))';
 }
 
 /** Strip legal suffixes and punctuation so "Wiz, Inc." and "Wiz" are one company. */
@@ -169,7 +175,7 @@ function loadCompanyCache_() {
  * Failures are cached as Unknown too — one bad lookup shouldn't re-bill Opus
  * on every subsequent email from that company.
  */
-function companyProfile_(book, companyName, hintUrl) {
+function companyProfile_(book, companyName, hintUrl, locationHint) {
   var key = normalizeCompany_(companyName);
   if (!key) return { market: '', description: '' };
   if (book.companies[key]) return book.companies[key];
@@ -180,7 +186,7 @@ function companyProfile_(book, companyName, hintUrl) {
   var profile;
   try {
     book.enrichCount++;
-    profile = sanitizeProfile_(enrichCompany_(companyName, hintUrl));
+    profile = sanitizeProfile_(enrichCompany_(companyName, hintUrl, locationHint));
   } catch (err) {
     Logger.log('enrich failed for ' + companyName + ': ' + err);
     profile = null;
@@ -286,7 +292,7 @@ function upsertApplication_(book, triage, msg) {
     if (!row[A_LOCATION] && triage.location) row[A_LOCATION] = safeCell_(triage.location, 120);
     if (!row[A_ATS] && triage.source_ats) row[A_ATS] = safeCell_(triage.source_ats, 60);
     if (!row[A_MARKET]) {
-      var refreshed = companyProfile_(book, triage.company, triage.job_url);
+      var refreshed = companyProfile_(book, triage.company, triage.job_url, triage.location);
       row[A_MARKET] = safeCell_(refreshed.market, 40);
       row[A_DESC] = safeCell_(refreshed.description, 600);
     }
@@ -299,7 +305,7 @@ function upsertApplication_(book, triage, msg) {
     return 'updated ' + row[A_COMPANY] + ' -> ' + row[A_STAGE] + '/' + row[A_STATUS];
   }
 
-  var profile = companyProfile_(book, triage.company, triage.job_url);
+  var profile = companyProfile_(book, triage.company, triage.job_url, triage.location);
   var fresh = new Array(APP_HEADERS.length).fill('');
   fresh[A_COMPANY] = safeCell_(triage.company, 120);
   fresh[A_ROLE] = safeCell_(triage.role, 200);
