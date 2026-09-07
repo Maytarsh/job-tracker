@@ -46,6 +46,11 @@ function formatApplications_(sheet) {
   sheet.setColumnWidth(A_NOTES + 1, 260);
   sheet.getRange(2, A_DESC + 1, sheet.getMaxRows() - 1, 1).setWrap(true);
 
+  // Days quiet is a count, not a date. Subtracting two dates leaves Sheets
+  // formatting the result as one, so 22 days renders as 22/01/1900 — the right
+  // number wearing the wrong clothes. Pin the format to a plain integer.
+  sheet.getRange(2, A_QUIET + 1, sheet.getMaxRows() - 1, 1).setNumberFormat('0');
+
   var lastRow = sheet.getMaxRows();
   var statusRange = sheet.getRange(2, A_STATUS + 1, lastRow - 1, 1);
   var stageRange = sheet.getRange(2, A_STAGE + 1, lastRow - 1, 1);
@@ -100,9 +105,12 @@ function onOpen() {
     .addItem('Check mail now', 'pollInbox')
     .addItem('Backfill history', 'runBackfill')
     .addSeparator()
+    .addItem('Coverage report', 'menuCoverage')
+    .addSeparator()
     .addItem('Flag ghosted rows', 'markStale')
     .addItem('Rescan skipped mail', 'menuRescanSkipped')
     .addItem('Re-research selected companies', 'menuReEnrichSelected')
+    .addItem('Fill in missing company profiles', 'menuEnrichMissing')
     .addSeparator()
     .addItem('Replay selected _Processed rows', 'menuReplaySelected')
     .addItem('Run setup', 'setup')
@@ -186,6 +194,137 @@ function menuReplaySelected() {
   toast_('Cleared ' + count + ' row(s) — replaying over the backfill window…');
   runBackfill();
   toast_('Replay complete. Check _Processed for the new rows.');
+}
+
+/**
+ * How far back the tool has actually looked, and what it classified but never
+ * wrote down.
+ *
+ * The sheet cannot show you what it never saw. A window that was never swept
+ * looks exactly like a window with no job mail in it, which is how a month of
+ * applications went missing while everything on screen looked healthy. This is
+ * the one screen that can tell you the difference, so check it after a backfill
+ * rather than trusting a full-looking table.
+ */
+function menuCoverage() {
+  var oldest = oldestExaminedDate_();
+  var book = openBook_();
+  var missing = unwrittenCompanies_(book);
+  var blanks = 0;
+  book.rows.forEach(function (row) {
+    if (row[A_COMPANY] && !row[A_MARKET]) blanks++;
+  });
+
+  var unclassified = countUnclassified_();
+  var lines = [
+    oldest
+      ? 'Mail examined back to: ' + oldest.toDateString()
+      : 'No mail examined yet — run Backfill history.',
+    'Spent today: $' + spendToday_().toFixed(2) +
+      ' of $' + CONFIG.DAILY_BUDGET_USD.toFixed(2),
+    'Application rows: ' + book.rows.length,
+    'Rows still missing a Market: ' + blanks +
+      (blanks ? ' (Fill in missing company profiles)' : '')
+  ];
+
+  if (unclassified) {
+    lines.push('Messages that could not be classified: ' + unclassified +
+               ' (see _Processed, Action starts with "failed:")');
+  }
+
+  if (missing.length) {
+    lines.push('');
+    lines.push('Classified as applications but not in the table (' +
+               missing.length + '): ' + missing.slice(0, 10).join(', ') +
+               (missing.length > 10 ? ', …' : ''));
+  }
+
+  lines.push('');
+  lines.push('Anything older than the first date above has never been looked at. ' +
+             'Backfill history is the only thing that reaches it — the 30-minute ' +
+             'poll only ever looks forward.');
+
+  var msg = lines.join('\n');
+  Logger.log(msg);
+  try {
+    SpreadsheetApp.getUi().alert('Coverage', msg, SpreadsheetApp.getUi().ButtonSet.OK);
+  } catch (e) { /* no UI when run from the editor */ }
+  return msg;
+}
+
+/** Messages examined but never classified — a bad response, not a missed email. */
+function countUnclassified_() {
+  var sheet = getSheet_(TABS.PROCESSED);
+  var last = sheet.getLastRow();
+  if (last < 2) return 0;
+
+  var count = 0;
+  sheet.getRange(2, P_ACTION + 1, last - 1, 1).getValues().forEach(function (r) {
+    if (String(r[0]).indexOf('failed:') === 0) count++;
+  });
+  return count;
+}
+
+/** The earliest message either log has a record of examining. */
+function oldestExaminedDate_() {
+  var oldest = null;
+  [TABS.PROCESSED, TABS.SKIPPED].forEach(function (tab) {
+    var sheet = getSheet_(tab);
+    var last = sheet.getLastRow();
+    if (last < 2) return;
+    sheet.getRange(2, 2, last - 1, 1).getValues().forEach(function (r) {
+      if (!r[0]) return;
+      var date = new Date(r[0]);
+      if (isNaN(date.getTime())) return;
+      if (!oldest || date < oldest) oldest = date;
+    });
+  });
+  return oldest;
+}
+
+/**
+ * Companies that triage called a real application but that have no row. Every
+ * one is either a bug or a message whose upsert failed, and both are invisible
+ * without asking.
+ */
+function unwrittenCompanies_(book) {
+  var sheet = getSheet_(TABS.PROCESSED);
+  var last = sheet.getLastRow();
+  if (last < 2) return [];
+
+  var present = {};
+  book.rows.forEach(function (row) {
+    var key = normalizeCompany_(row[A_COMPANY]);
+    if (key) present[key] = true;
+  });
+
+  var missing = {};
+  sheet.getRange(2, 1, last - 1, PROCESSED_HEADERS.length).getValues()
+    .forEach(function (r) {
+      if (!WRITE_CATEGORIES[r[4]]) return;
+      if (String(r[P_ACTION]) === DRY_RUN_ACTION) return;
+      var key = normalizeCompany_(r[5]);
+      if (key && !present[key]) missing[key] = r[5];
+    });
+
+  return Object.keys(missing).map(function (key) { return missing[key]; });
+}
+
+/** Research every row whose Market is still blank, within one run's budget. */
+function menuEnrichMissing() {
+  var book = openBook_();
+  book.deadline = Date.now() + CONFIG.RUN_BUDGET_SECONDS * 1000;
+  var filled = fillMissingProfiles_(book);
+  flushBook_(book);
+
+  var remaining = 0;
+  book.rows.forEach(function (row) {
+    if (row[A_COMPANY] && !row[A_MARKET]) remaining++;
+  });
+  toast_(filled
+    ? 'Filled ' + filled + ' profile(s)' +
+      (remaining ? '; ' + remaining + ' left — run again.' : '.')
+    : 'Nothing to fill in.');
 }
 
 /** Clear _Skipped so a widened prefilter reconsiders that mail. */

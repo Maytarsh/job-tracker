@@ -24,7 +24,8 @@ schema with no `enum` constraints once.
 - A trailing underscore (`upsertApplication_`) marks a private function. Apps Script
   hides those from the editor's Run dropdown, so **only** the intended entry points
   lack one: `setup`, `onOpen`, `pollInbox`, `runBackfill`, `markStale`,
-  `menuReEnrichSelected`, `menuReplaySelected`, `menuRescanSkipped`.
+  `menuReEnrichSelected`, `menuReplaySelected`, `menuRescanSkipped`,
+  `menuEnrichMissing`, `menuCoverage`.
 - ES5-flavoured V8: `var`, `function`, string concatenation. Match it.
 - Everything reaching the Sheet originates in an email, so it is untrusted. Route it
   through `safeCell_()` (formula-injection prefix, control-char strip, length cap), and
@@ -42,6 +43,39 @@ Deployment is **manual copy-paste** into the Apps Script editor, one editor file
   and clears the trigger's failure-notification setting.
 - Adding an OAuth scope means `src/appsscript.json` must be re-pasted too, and the user
   re-authorizes.
+
+## A message must never be silently dropped
+
+The failure this codebase is most prone to is losing mail quietly: the sheet looks
+complete, and nothing anywhere says otherwise. Three rules hold the line.
+
+- **The cursor may not pass anything unhandled.** `pollInbox` only advances
+  `LAST_RUN_EPOCH` past a window with no failures in it, and rewinds to just before
+  the oldest failure otherwise. A message that errors gets no `_Processed` row so it
+  will be retried — advancing past it puts it outside every future window, in neither
+  log, gone with no trace but a line in an execution log.
+- **Stop before the 6-minute kill, not at it.** Everything is buffered in memory and
+  written once by `flushBook_`, so a killed execution loses the whole run *and* the
+  backfill's continuation trigger — the backfill then stops part-way and looks
+  finished. `CONFIG.RUN_BUDGET_SECONDS` is the guard; anything slow added to the
+  per-message path has to be checked against it.
+- **Only the poll looks forward; only the backfill looks back.** A window that was
+  never swept is indistinguishable from a window with no job mail in it. `menuCoverage`
+  is what tells them apart — it reports the oldest message either log has examined.
+
+## Spending
+
+`callAnthropic_()` is the only place a request leaves the script, so the daily ceiling
+is enforced there rather than at the call sites — a new menu item or self-healing pass
+cannot spend past it by forgetting to ask. Every response is priced from its own
+`usage` into `SPEND_USD`, which rolls over at UTC midnight.
+
+The cost of a call is dominated by what the server tools drag into the conversation,
+not by the prompt. A `web_fetch` without `max_content_tokens` puts a whole page in
+context, where it is re-sent as input on every following turn of the tool loop — that
+alone took one company's research from cents to dollars. Cap anything that can pull
+unbounded content in, and check the `enriched …` log line, which prints tokens,
+searches, fetches and the running daily total.
 
 ## Testing
 
@@ -64,6 +98,11 @@ exercised in the Apps Script editor.
 
 ## Git
 
-Branch and open a PR with `gh`; do not commit to `main`. Commit subjects are imperative
-sentence-case describing the behaviour change, no type prefix — e.g. "Stop the backfill
-re-queueing itself forever".
+Branch and open a PR with `gh`; do not commit to `main`. Cut the branch **before the
+first edit**, not at commit time — `.claude/hooks/require-branch.sh` refuses Write and
+Edit on this repo's files while HEAD is the default branch, because the rule as prose
+was read as being about commits alone. `git checkout -b <name>` carries uncommitted
+work across, so being stopped costs nothing.
+
+Commit subjects are imperative sentence-case describing the behaviour change, no type
+prefix — e.g. "Stop the backfill re-queueing itself forever".
