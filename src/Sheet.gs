@@ -111,11 +111,16 @@ function openBook_() {
 }
 
 /**
- * One flush per run: changed rows, then every append, then the derived column.
+ * One flush per run: changed rows, then every append, then the reorder and the
+ * derived column.
  *
  * The per-row assignment below is not redundant with refreshQuietColumn_: getValues()
  * returns a formula cell's computed *value*, so a row loaded from the sheet carries
  * the number 0.32, and writing it back unchanged would replace the formula with it.
+ *
+ * This has to stay the last thing a run writes to Applications. The sort moves
+ * rows about, so every index in book.rows and book.dirty points somewhere else
+ * afterwards — a second flush in the same run would write rows over each other.
  */
 function flushBook_(book) {
   var width = APP_HEADERS.length;
@@ -136,6 +141,11 @@ function flushBook_(book) {
       .setValues(book.appended);
   }
 
+  // Sort first, then rewrite the formulas. Sorting drags the Days quiet cells
+  // along with their rows and re-points their row references on the way, which
+  // does not matter only because refreshQuietColumn_ writes that column out
+  // wholesale immediately after.
+  sortByLastUpdate_(book.appSheet);
   refreshQuietColumn_(book.appSheet);
   appendRows_(TABS.COMPANIES, book.newCompanies);
   appendRows_(TABS.PROCESSED, book.processed);
@@ -147,6 +157,24 @@ function appendRows_(tabName, rows) {
   var sheet = getSheet_(tabName);
   sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, rows[0].length)
     .setValues(rows);
+}
+
+/**
+ * Newest activity first, so anything an email just touched is at the top.
+ *
+ * Done as a sort of the whole table rather than by moving the rows that changed:
+ * one batched call instead of one per row, and it reaches rows this run never
+ * loaded — so the ordering also settles the existing sheet on the first run,
+ * with no migration to write and nothing to remember to remove afterwards.
+ *
+ * Rows with an empty Last update sink to the bottom, which is where Sheets puts
+ * blanks in a descending sort and where a row nothing has happened to belongs.
+ */
+function sortByLastUpdate_(sheet) {
+  var last = sheet.getLastRow();
+  if (last < 3) return;  // header plus at most one row: nothing to reorder
+  sheet.getRange(2, 1, last - 1, APP_HEADERS.length)
+    .sort({ column: A_UPDATED + 1, ascending: false });
 }
 
 /**
@@ -306,6 +334,10 @@ function fillMissingProfiles_(book) {
  * it for a confirmation that names a *different* role would merge two genuinely
  * separate applications into one.
  *
+ * "The company's open row" means the most recently updated one, compared by
+ * date rather than taken as the last one seen: the sheet is sorted newest-first
+ * now, so position on it says the opposite of what it used to.
+ *
  * Returns {list, i, exact} where list is 'rows' (already on the sheet) or
  * 'appended' (created earlier in this same run); those flush differently, so a
  * row created and then updated within one run must not be written twice.
@@ -313,6 +345,7 @@ function fillMissingProfiles_(book) {
 function findRow_(book, companyKey, role, allowFallback) {
   var roleKey = normalizeRole_(role);
   var open = null;
+  var openUpdated = -1;
   var lists = ['rows', 'appended'];
 
   for (var l = 0; l < lists.length; l++) {
@@ -325,12 +358,21 @@ function findRow_(book, companyKey, role, allowFallback) {
       if (!roleKey && !list[i][A_ROLE]) {
         return { list: lists[l], i: i, exact: true };
       }
-      if (list[i][A_STATUS] === 'Open') {
+      if (list[i][A_STATUS] === 'Open' && rowUpdatedTime_(list[i]) >= openUpdated) {
         open = { list: lists[l], i: i, exact: false };
+        openUpdated = rowUpdatedTime_(list[i]);
       }
     }
   }
   return allowFallback ? open : null;  // most recent open row, or nothing
+}
+
+/** Last update as a comparable number, 0 when it is missing or unreadable. */
+function rowUpdatedTime_(row) {
+  var value = row[A_UPDATED];
+  if (!value) return 0;
+  var time = (value instanceof Date ? value : new Date(value)).getTime();
+  return isNaN(time) ? 0 : time;
 }
 
 function stageFromTriage_(triage) {

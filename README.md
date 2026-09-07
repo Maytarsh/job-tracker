@@ -113,6 +113,11 @@ The 30-minute trigger keeps it current from then on.
 | Confidence | `low` = worth checking. Also set when a row match had to be guessed |
 | **Notes** | **yours — the automation never reads or writes this column** |
 
+Rows are kept sorted by **Last update**, newest first, so whatever an email just
+touched is directly under the header. The sort runs at the end of every write, over
+the whole table, so it also tidies rows that run never looked at — sorting the sheet
+by hand is never needed, and any manual reordering is undone on the next run.
+
 **`Companies`** caches one researched profile per company, so Opus is called once per
 company ever. The Location from the email is passed into that research: a small
 company's name on its own is often ambiguous, and the hiring location is usually what
