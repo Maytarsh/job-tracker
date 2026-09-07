@@ -98,6 +98,11 @@ exercised in the Apps Script editor.
 
 ## Git
 
-Branch and open a PR with `gh`; do not commit to `main`. Commit subjects are imperative
-sentence-case describing the behaviour change, no type prefix — e.g. "Stop the backfill
-re-queueing itself forever".
+Branch and open a PR with `gh`; do not commit to `main`. Cut the branch **before the
+first edit**, not at commit time — `.claude/hooks/require-branch.sh` refuses Write and
+Edit on this repo's files while HEAD is the default branch, because the rule as prose
+was read as being about commits alone. `git checkout -b <name>` carries uncommitted
+work across, so being stopped costs nothing.
+
+Commit subjects are imperative sentence-case describing the behaviour change, no type
+prefix — e.g. "Stop the backfill re-queueing itself forever".
