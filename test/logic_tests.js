@@ -198,6 +198,92 @@ t('refreshing an empty sheet writes nothing', function () {
   ok(!touched, 'a header-only sheet is left alone');
 });
 
+// ------------------------------------------------------------- row ordering
+function orderingSheet(dataRows) {
+  var calls = [];
+  return {
+    calls: calls,
+    getLastRow: function () { return dataRows + 1; },
+    getRange: function (row, col, numRows, numCols) {
+      return {
+        setValues: function () {
+          calls.push({ op: 'setValues', row: row, col: col, numRows: numRows, numCols: numCols });
+        },
+        sort: function (spec) {
+          calls.push({ op: 'sort', row: row, col: col, numRows: numRows,
+                       numCols: numCols, by: spec.column, ascending: spec.ascending });
+        }
+      };
+    }
+  };
+}
+
+t('the table is sorted by Last update, newest first', function () {
+  var sheet = orderingSheet(3);
+  sortByLastUpdate_(sheet);
+  eq(sheet.calls.length, 1, 'one batched sort, not a move per row');
+  var call = sheet.calls[0];
+  eq(call.op, 'sort');
+  eq(call.by, A_UPDATED + 1, 'sorts on Last update');
+  eq(call.ascending, false, 'newest first');
+  eq(call.row, 2, 'leaves the header where it is');
+  eq(call.numRows, 3, 'covers every data row, including ones this run never loaded');
+  eq(call.numCols, APP_HEADERS.length, 'moves whole rows, not one column');
+});
+
+t('a table with nothing to reorder is left alone', function () {
+  var single = orderingSheet(1);
+  sortByLastUpdate_(single);
+  var empty = orderingSheet(0);
+  sortByLastUpdate_(empty);
+  eq(single.calls.length, 0, 'one row cannot be out of order');
+  eq(empty.calls.length, 0, 'nor can none');
+});
+
+t('the flush sorts before it rewrites the quiet formulas', function () {
+  // The other way round and every formula would be rewritten for the row it
+  // used to be on, then dragged somewhere else by the sort.
+  var sheet = orderingSheet(3);
+  flushBook_({ appSheet: sheet, rows: [], dirty: {}, appended: [],
+               newCompanies: [], processed: [], skipped: [] });
+  var ops = sheet.calls.map(function (c) { return c.op; });
+  eq(ops, ['sort', 'setValues'], 'sort, then the derived column');
+  eq(sheet.calls[1].col, A_QUIET + 1, 'the write after the sort is Days quiet');
+});
+
+t('a role-less email updates the most recently updated open row, wherever it sits',
+  function () {
+    function openRow(role, updated) {
+      var r = new Array(APP_HEADERS.length).fill('');
+      r[A_COMPANY] = 'Wiz';
+      r[A_ROLE] = role;
+      r[A_STATUS] = 'Open';
+      r[A_STAGE] = 'Applied';
+      r[A_MARKET] = 'Cybersecurity';
+      r[A_UPDATED] = updated;
+      return r;
+    }
+    var rej = JSON.parse(JSON.stringify(CONFIRM));
+    rej.category = 'rejection';
+    rej.role = '';  // rejections often name no role, which is what allows the fallback
+
+    // Newest-first is how the sheet is kept now; oldest-first is how it used to
+    // be. The fallback compares dates, so neither order changes which row wins.
+    [['recent', 'old'], ['old', 'recent']].forEach(function (order) {
+      var b = fakeBook();
+      order.forEach(function (which) {
+        b.rows.push(which === 'recent'
+          ? openRow('Newer Role', new Date(2026, 7, 20))
+          : openRow('Older Role', new Date(2026, 7, 1)));
+      });
+      upsertApplication_(b, rej, msgAt(25));
+      eq(b.appended.length, 0, 'no duplicate row');
+      var closed = b.rows.filter(function (r) { return r[A_STATUS] === 'Closed'; });
+      eq(closed.length, 1, 'exactly one row closed');
+      eq(closed[0][A_ROLE], 'Newer Role', 'closed the most recently updated one');
+    });
+  });
+
 t('the quiet-days formula counts whole days', function () {
   // Last update is a timestamp, TODAY() is midnight; without INT() the column
   // renders a fraction like 0.3251041 instead of a day count.
