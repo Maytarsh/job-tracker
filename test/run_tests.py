@@ -5,7 +5,7 @@ Apps Script has no local runtime, so this loads the source files into a real JS
 engine with the Google services stubbed out. Covers pure logic only - anything
 touching Gmail, Sheets or the API is exercised in the Apps Script editor instead.
 """
-import glob, json, os, sys
+import glob, json, logging, os, sys
 from selenium import webdriver
 from selenium.webdriver.firefox.options import Options
 
@@ -71,6 +71,14 @@ def check_probe_schema_drift():
 
 
 def main():
+    # geckodriver runs under snap confinement, which refuses this process's
+    # SIGTERM. Selenium catches the resulting PermissionError, logs the whole
+    # traceback and carries on (service.py: "does not raise itself ... but
+    # ignores errors here") - so it prints after every test has already run and
+    # passed, once at driver.quit() and once at exit. It made a green run look
+    # like a failed one, which is worse than the leaked process it reports.
+    logging.getLogger('selenium.webdriver.common.service').setLevel(logging.CRITICAL)
+
     opts = Options()
     opts.add_argument('-headless')
     # /usr/bin/firefox is a snap wrapper script, not an executable geckodriver
