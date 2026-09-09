@@ -318,15 +318,18 @@ function enrichCompany_(companyName, hintUrl, locationHint) {
   // Success is otherwise silent: without this the Executions tab shows nothing
   // for a completed enrichment, and there is no way to see what a company cost
   // or why a profile came back thin. stop_reason is the tell for a turn that
-  // ran out of max_tokens before it ever called save_company_profile.
+  // ran out of max_tokens before it ever called save_company_profile, and
+  // toolErrors the tell for one that never got the search results it asked for.
   var usage = res.usage || {};
   var serverTools = usage.server_tool_use || {};
+  var toolErrors = serverToolErrors_(res.content);
   Logger.log(
     'enriched ' + companyName + ': ' +
     (serverTools.web_search_requests || 0) + ' search(es), ' +
     (serverTools.web_fetch_requests || 0) + ' fetch(es), ' +
     (usage.input_tokens || 0) + ' in / ' + (usage.output_tokens || 0) + ' out, ' +
-    'stop=' + res.stop_reason + ', $' + spendToday_().toFixed(2) + ' today'
+    'stop=' + res.stop_reason + ', $' + spendToday_().toFixed(2) + ' today' +
+    (toolErrors.length ? ', TOOL ERRORS: ' + toolErrors.join('; ') : '')
   );
 
   var content = res.content || [];
@@ -343,4 +346,34 @@ function firstOfType_(blocks, type) {
     if (blocks[i].type === type) return blocks[i];
   }
   return null;
+}
+
+/**
+ * Server tools fail in-band, which is the quietest failure the enrichment path
+ * has. A web_search or web_fetch that goes wrong comes back on an HTTP 200 as a
+ * *_tool_result block whose content is an error object instead of results —
+ * nothing throws, callAnthropic_ sees an ordinary response, and the model
+ * profiles the company from whatever it already knew. ENRICH_SYSTEM tells it to
+ * answer "Unknown" when search fails, but that is a prompt-level promise, and a
+ * profile that comes back confident and wrong is cached in Companies for good:
+ * menuEnrichMissing only revisits rows whose Market is empty, never ones that
+ * are merely incorrect. So the log has to say it happened.
+ *
+ * Returns entries like 'web_search: max_uses_exceeded'.
+ */
+function serverToolErrors_(content) {
+  var errors = [];
+  for (var i = 0; i < (content || []).length; i++) {
+    var block = content[i] || {};
+    if (block.type !== 'web_search_tool_result' &&
+        block.type !== 'web_fetch_tool_result') continue;
+    // A success carries results: an array for search, a document object for
+    // fetch. Only the error shape has error_code, and reading it off an array
+    // gives undefined rather than throwing, so no type check is needed.
+    var inner = block.content;
+    if (inner && inner.error_code) {
+      errors.push(block.type.replace('_tool_result', '') + ': ' + inner.error_code);
+    }
+  }
+  return errors;
 }
