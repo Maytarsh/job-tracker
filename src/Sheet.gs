@@ -206,10 +206,20 @@ function quietFormula_(rowNumber) {
          'TODAY()-INT($H' + rowNumber + '))';
 }
 
-/** Strip legal suffixes and punctuation so "Wiz, Inc." and "Wiz" are one company. */
+/**
+ * Strip legal suffixes and punctuation so "Wiz, Inc." and "Wiz" are one company.
+ *
+ * The domain suffix goes too: an ATS mails as "Sedric.ai" while a recruiter
+ * writes "Sedric", and without this those are two keys, so findRow_ never
+ * merges them and the company gets two rows. It has to run before punctuation
+ * is flattened — the trailing dot is the only thing that tells a domain from a
+ * word, and "Cato Networks" must stay distinct from "Cato".
+ */
 function normalizeCompany_(name) {
   return String(name || '')
+    .trim()
     .toLowerCase()
+    .replace(/\.(ai|io|com|co|net|org|dev|app|xyz)$/, '')
     .replace(/[^a-z0-9\s]/g, ' ')
     .replace(/\b(inc|ltd|limited|llc|corp|corporation|gmbh|bv|sa|ag|plc|technologies|technology|software|systems|solutions|labs|israel|group|holdings)\b/g, ' ')
     .replace(/\s+/g, '')

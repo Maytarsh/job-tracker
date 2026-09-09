@@ -21,9 +21,17 @@ t('company normalization folds legal suffixes', function () {
   eq(normalizeCompany_('Acme Technologies Ltd'), normalizeCompany_('Acme'));
   eq(normalizeCompany_('Check Point Software Technologies'), 'checkpoint');
 });
+t('company normalization folds the domain suffix', function () {
+  eq(normalizeCompany_('Sedric.ai'), normalizeCompany_('Sedric'));
+  eq(normalizeCompany_('Monday.com'), normalizeCompany_('monday'));
+  eq(normalizeCompany_(' Sedric.ai '), normalizeCompany_('Sedric'));
+});
 t('company normalization keeps distinct companies distinct', function () {
   ok(normalizeCompany_('Wiz') !== normalizeCompany_('Wix'), 'Wiz vs Wix');
   ok(normalizeCompany_('Cato Networks') !== normalizeCompany_('Cato'), 'Networks is meaningful');
+  // The trailing dot is what licenses the strip, so a bare word is left alone
+  // rather than guessing that every company ending in "ai" is a domain.
+  ok(normalizeCompany_('Sedric AI') !== normalizeCompany_('Sedric'), 'no dot, no strip');
 });
 t('role normalization ignores punctuation and case', function () {
   eq(normalizeRole_('Senior Security Researcher'), normalizeRole_('senior  security-researcher'));
