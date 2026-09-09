@@ -6,3 +6,14 @@ requires-python = ">=3.9"
 dependencies = [
     "selenium>=4.20",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.2",
+]
+
+[tool.pytest.ini_options]
+# Pins the rootdir to the repo, so `test/` lands on sys.path and test_logic.py
+# can `import run_tests` whether pytest is started from the CLI or from an IDE
+# right-click on the folder.
+testpaths = ["test"]

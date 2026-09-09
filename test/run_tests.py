@@ -53,7 +53,8 @@ def build_page():
 
 def check_probe_schema_drift():
     """tools/probe.py restates the triage schema so it can run standalone.
-    If it drifts from src/Claude.gs the probe stops validating the real thing."""
+    If it drifts from src/Claude.gs the probe stops validating the real thing.
+    Returns (ok, detail) - detail is the line to report, either way."""
     import re
     gs = open(os.path.join(SRC, 'Claude.gs'), encoding='utf-8').read()
     py = open(os.path.join(ROOT, 'tools', 'probe.py'), encoding='utf-8').read()
@@ -62,15 +63,18 @@ def check_probe_schema_drift():
     gs_fields = set(re.findall(r'^    (\w+): \{', gs_block, re.M))
     py_fields = set(re.findall(r'^        "(\w+)": \{', py_block, re.M))
     if gs_fields != py_fields:
-        print("  FAIL  probe.py triage schema has drifted from Claude.gs")
-        print(f"        only in Claude.gs: {sorted(gs_fields - py_fields)}")
-        print(f"        only in probe.py:  {sorted(py_fields - gs_fields)}")
-        return False
-    print(f"  PASS  probe.py schema matches Claude.gs ({len(gs_fields)} fields)")
-    return True
+        return False, ("probe.py triage schema has drifted from Claude.gs\n"
+                       f"        only in Claude.gs: {sorted(gs_fields - py_fields)}\n"
+                       f"        only in probe.py:  {sorted(py_fields - gs_fields)}")
+    return True, f"probe.py schema matches Claude.gs ({len(gs_fields)} fields)"
 
 
-def main():
+def run_logic_tests():
+    """Load the sources in headless Firefox and return the JS suite's results.
+
+    Raises RuntimeError rather than exiting, so pytest can report the failure as
+    a normal error instead of killing the interpreter mid-collection.
+    """
     # geckodriver runs under snap confinement, which refuses this process's
     # SIGTERM. Selenium catches the resulting PermissionError, logs the whole
     # traceback and carries on (service.py: "does not raise itself ... but
@@ -90,20 +94,28 @@ def main():
             break
     driver = webdriver.Firefox(options=opts)
     try:
-        url = build_page()
-        driver.get(url)
+        driver.get(build_page())
         load_error = driver.execute_script("return window.loadError;")
         if load_error:
-            sys.exit("source threw while loading:\n" + load_error)
+            raise RuntimeError("source threw while loading:\n" + load_error)
         results = driver.execute_script("return window.results || null;")
     finally:
         driver.quit()
 
     if results is None:
-        sys.exit("no results - a source file threw while loading")
+        raise RuntimeError("no results - a source file threw while loading")
+    return results
+
+
+def main():
+    try:
+        results = run_logic_tests()
+    except RuntimeError as exc:
+        sys.exit(str(exc))
 
     failed = [r for r in results if not r['pass']]
-    drift_ok = check_probe_schema_drift()
+    drift_ok, drift_detail = check_probe_schema_drift()
+    print(("  PASS  " if drift_ok else "  FAIL  ") + drift_detail)
     for r in results:
         print(("  PASS  " if r['pass'] else "  FAIL  ") + r['name'])
         if not r['pass']:
