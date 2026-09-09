@@ -6,7 +6,7 @@ still alive. Runs unattended in Google Apps Script; no server, nothing to instal
 
 ```
 Time trigger (30 min) ─▶ pollInbox()
-   collect  →  prefilter  →  triage (Haiku)  →  enrich (Opus + web search/fetch)  →  upsert
+   collect  →  prefilter  →  triage (Haiku)  →  enrich (Sonnet + web search/fetch)  →  upsert
 Daily trigger ────────▶ markStale()   Open + silent 30 days → Ghosted
 ```
 
@@ -118,10 +118,10 @@ touched is directly under the header. The sort runs at the end of every write, o
 the whole table, so it also tidies rows that run never looked at — sorting the sheet
 by hand is never needed, and any manual reordering is undone on the next run.
 
-**`Companies`** caches one researched profile per company, so Opus is called once per
-company ever. The Location from the email is passed into that research: a small
-company's name on its own is often ambiguous, and the hiring location is usually what
-separates it from the unrelated businesses sharing the name.
+**`Companies`** caches one researched profile per company, so the enrichment model is
+called once per company ever. The Location from the email is passed into that
+research: a small company's name on its own is often ambiguous, and the hiring
+location is usually what separates it from the unrelated businesses sharing the name.
 
 ## Re-testing on real emails
 
@@ -161,7 +161,7 @@ Everything lives in `src/Config.gs`:
 | `BACKFILL_DAYS` | 30 | how far back history goes |
 | `STALE_DAYS` | 30 | when an Open row becomes Ghosted |
 | `MAX_MESSAGES_PER_RUN` | 50 | chunk size; backfill re-queues itself past this |
-| `MAX_ENRICH_PER_RUN` | 15 | ceiling on Opus calls per execution |
+| `MAX_ENRICH_PER_RUN` | 3 | ceiling on enrichment calls per execution |
 | `MAX_BACKFILL_CHUNKS` | 40 | hard stop on backfill self-requeueing |
 
 The prefilter is deliberately over-inclusive: a missed confirmation is a lost row,

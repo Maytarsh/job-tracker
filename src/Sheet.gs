@@ -237,8 +237,8 @@ function loadCompanyCache_() {
 
 /**
  * Look the company up in the cache; research it only if it's genuinely new.
- * Failures are cached as Unknown too — one bad lookup shouldn't re-bill Opus
- * on every subsequent email from that company.
+ * Failures are cached as Unknown too — one bad lookup shouldn't re-bill the
+ * enrichment model on every subsequent email from that company.
  */
 function companyProfile_(book, companyName, hintUrl, locationHint) {
   var key = normalizeCompany_(companyName);
