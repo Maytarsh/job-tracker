@@ -3,13 +3,19 @@
 
 Sends two real requests with ANTHROPIC_API_KEY from the environment:
   1. Triage   - claude-haiku-4-5 + output_config.format (json_schema)
-  2. Enrich   - claude-opus-5 + web_search/web_fetch server tools + strict tool use
+  2. Enrich   - claude-sonnet-5 + web_search/web_fetch server tools + strict tool use
 
 Stdlib only, deliberately - do not reach for `requests` here. Two properties depend
 on it: the payloads mirror exactly what UrlFetchApp sends from Apps Script, which has
 no package ecosystem to borrow from, and the probe stays runnable straight from a
 checkout when the API is the thing under suspicion. It is the one file in the repo
 with no dependency to install, and worth keeping that way.
+
+Standalone means every value here restates one in src/, and a restatement rots
+silently: a probe sending a payload production no longer sends proves nothing about
+production. check_probe_drift() in test/run_tests.py fails if any of the mirrors
+below, either schema, or either payload's key set drifts from src/. Change one side,
+change the other.
 """
 import json
 import os
@@ -19,6 +25,27 @@ import urllib.request
 
 API = "https://api.anthropic.com/v1/messages"
 KEY = os.environ.get("ANTHROPIC_API_KEY")
+
+# --- mirrors of src/Config.gs (drift-checked; see the module docstring) --------
+API_VERSION = "2023-06-01"
+TRIAGE_MODEL = "claude-haiku-4-5"
+ENRICH_MODEL = "claude-sonnet-5"
+# Both max_tokens are literals in src/Claude.gs, not Config knobs. Triage needs
+# 2048 because a LinkedIn job link's tracking parameters overran 1024 and the
+# truncation surfaced as an unterminated-JSON SyntaxError.
+TRIAGE_MAX_TOKENS = 2048
+ENRICH_MAX_TOKENS = 8192
+WEB_SEARCH_TYPE = "web_search_20260209"
+WEB_FETCH_TYPE = "web_fetch_20260209"
+ENRICH_MAX_SEARCHES = 3
+ENRICH_MAX_FETCHES = 1
+ENRICH_MAX_FETCH_TOKENS = 6000
+PRICE_PER_MTOK = {
+    "claude-haiku-4-5": {"input": 1, "output": 5},
+    "claude-sonnet-5": {"input": 2, "output": 10},
+    "claude-opus-5": {"input": 5, "output": 25},
+}
+PRICE_PER_SEARCH = 0.01
 
 SAMPLE_EMAIL = """From: no-reply@us.greenhouse-mail.io
 Subject: Thanks for applying to Wiz!
@@ -99,7 +126,7 @@ def call(payload):
         headers={
             "content-type": "application/json",
             "x-api-key": KEY,
-            "anthropic-version": "2023-06-01",
+            "anthropic-version": API_VERSION,
         },
         method="POST",
     )
@@ -112,13 +139,20 @@ def call(payload):
         raise
 
 
+def price(model, usage):
+    """Token cost of one response, priced exactly as recordSpend_() prices it."""
+    p = PRICE_PER_MTOK[model]
+    return (usage["input_tokens"] * p["input"]
+            + usage["output_tokens"] * p["output"]) / 1e6
+
+
 def probe_triage():
     print("=" * 70)
-    print("PROBE 1 — triage: claude-haiku-4-5 + output_config.format")
+    print("PROBE 1 — triage: " + TRIAGE_MODEL + " + output_config.format")
     print("=" * 70)
     res = call({
-        "model": "claude-haiku-4-5",
-        "max_tokens": 1024,
+        "model": TRIAGE_MODEL,
+        "max_tokens": TRIAGE_MAX_TOKENS,
         "system": [{
             "type": "text",
             "text": (
@@ -144,11 +178,12 @@ def probe_triage():
 
 def probe_enrich(company="Wiz", location=""):
     print("\n" + "=" * 70)
-    print("PROBE 2 — enrich: claude-opus-5 + web_search/web_fetch + strict tool use")
+    print("PROBE 2 — enrich: " + ENRICH_MODEL
+          + " + web_search/web_fetch + strict tool use")
     print("=" * 70)
     res = call({
-        "model": "claude-opus-5",
-        "max_tokens": 8192,
+        "model": ENRICH_MODEL,
+        "max_tokens": ENRICH_MAX_TOKENS,
         "system": (
             "You research one company and record its profile. Search the web to confirm "
             "what the company actually builds — do not rely on memory. Then call "
@@ -169,8 +204,14 @@ def probe_enrich(company="Wiz", location=""):
             ),
         }],
         "tools": [
-            {"type": "web_search_20260209", "name": "web_search", "max_uses": 6},
-            {"type": "web_fetch_20260209", "name": "web_fetch", "max_uses": 3},
+            {"type": WEB_SEARCH_TYPE, "name": "web_search",
+             "max_uses": ENRICH_MAX_SEARCHES},
+            # max_content_tokens is not optional here. Without it the whole page
+            # enters the conversation and is re-sent as input on every following
+            # turn, and the probe stops measuring what production costs.
+            {"type": WEB_FETCH_TYPE, "name": "web_fetch",
+             "max_uses": ENRICH_MAX_FETCHES,
+             "max_content_tokens": ENRICH_MAX_FETCH_TOKENS},
             COMPANY_TOOL,
         ],
         "tool_choice": {"type": "auto"},
@@ -202,10 +243,12 @@ if __name__ == "__main__":
         sys.argv[2] if len(sys.argv) > 2 else "",
     )
     if t and e:
-        # haiku 4.5: $1/$5 per MTok ; opus 5: $5/$25 per MTok
-        tri = (t["input_tokens"] * 1 + t["output_tokens"] * 5) / 1e6
-        enr = (e["input_tokens"] * 5 + e["output_tokens"] * 25) / 1e6
+        tri = price(TRIAGE_MODEL, t)
+        # web_search bills per search on top of tokens. Omitting it under-reported
+        # what a company costs, against a DAILY_BUDGET_USD that does count it.
+        searches = e.get("server_tool_use", {}).get("web_search_requests", 0)
+        enr = price(ENRICH_MODEL, e) + searches * PRICE_PER_SEARCH
         print("\n" + "=" * 70)
         print(f"cost/email   (triage) : ${tri:.5f}")
-        print(f"cost/company (enrich) : ${enr:.5f}")
+        print(f"cost/company (enrich) : ${enr:.5f}  ({searches} search(es))")
         print(f"est. 150 emails + 40 companies: ${tri * 150 + enr * 40:.2f}")
