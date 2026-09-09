@@ -596,6 +596,74 @@ t('enrichment can read a primary source, not just search snippets', function () 
   eq(tools[1].max_uses, CONFIG.ENRICH_MAX_FETCHES);
 });
 
+// A server tool does not raise when it fails: web_search and web_fetch report
+// errors in-band, on an otherwise successful response. That made the one failure
+// the enrichment path cannot see — the model answers from memory, the profile
+// looks fine, and Companies caches it for good.
+function runEnrich_(responseContent) {
+  var originalCall = callAnthropic_;
+  var originalLog = Logger.log;
+  var lines = [];
+  callAnthropic_ = function () {
+    return { content: responseContent, stop_reason: 'end_turn', usage: {} };
+  };
+  Logger.log = function (line) { lines.push(String(line)); };
+  try {
+    var profile = enrichCompany_('Algorio', '', 'Tel Aviv');
+  } finally {
+    callAnthropic_ = originalCall;
+    Logger.log = originalLog;
+  }
+  return { log: lines.join('\n'), profile: profile };
+}
+
+t('a failed web_search is reported instead of passing for no result', function () {
+  var log = runEnrich_([
+    { type: 'web_search_tool_result', content: { error_code: 'max_uses_exceeded' } }
+  ]).log;
+  ok(log.indexOf('TOOL ERRORS') !== -1, 'the failure is called out');
+  ok(log.indexOf('max_uses_exceeded') !== -1, 'the error code is in the log');
+  ok(log.indexOf('web_search') !== -1, 'and it says which tool failed');
+});
+
+t('a failed web_fetch is reported too', function () {
+  var log = runEnrich_([
+    { type: 'web_fetch_tool_result', content: { error_code: 'url_not_accessible' } }
+  ]).log;
+  ok(log.indexOf('web_fetch: url_not_accessible') !== -1, 'tool and code both logged');
+});
+
+t('every failed call is listed, not just the first', function () {
+  var log = runEnrich_([
+    { type: 'web_search_tool_result', content: { error_code: 'unavailable' } },
+    { type: 'web_search_tool_result', content: { error_code: 'query_too_long' } }
+  ]).log;
+  ok(log.indexOf('unavailable') !== -1 && log.indexOf('query_too_long') !== -1,
+     'both codes survive');
+});
+
+t('a turn whose tools all worked reports nothing', function () {
+  var log = runEnrich_([
+    { type: 'web_search_tool_result',
+      content: [{ type: 'web_search_result', title: 'Algorio', url: 'https://algor.io' }] },
+    { type: 'web_fetch_tool_result',
+      content: { type: 'web_fetch_result', document: { type: 'document' } } },
+    { type: 'text', text: 'Algorio builds trading infrastructure.' }
+  ]).log;
+  ok(log.indexOf('TOOL ERRORS') === -1, 'a clean turn stays quiet');
+  ok(log.indexOf('enriched Algorio') !== -1, 'the usual line is still written');
+});
+
+t('a tool error does not cost a profile the model still produced', function () {
+  var run = runEnrich_([
+    { type: 'web_search_tool_result', content: { error_code: 'unavailable' } },
+    { type: 'tool_use', name: 'save_company_profile',
+      input: { market: 'Fintech', description: 'Algorio builds trading infrastructure.' } }
+  ]);
+  eq(run.profile.market, 'Fintech');
+  ok(run.log.indexOf('unavailable') !== -1, 'and the failure is still on the record');
+});
+
 t('companyProfile_ hands the location to the research call', function () {
   var original = enrichCompany_;
   var seen = null;
