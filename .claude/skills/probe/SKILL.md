@@ -7,7 +7,7 @@ disable-model-invocation: true
 Run `tools/probe.py` (via `uv run`) to prove both request shapes work before they are ported into
 Apps Script, where iteration is slow.
 
-**This costs real money** — one `claude-haiku-4-5` triage call and one `claude-opus-5`
+**This costs real money** — one `claude-haiku-4-5` triage call and one `claude-sonnet-5`
 enrichment call with web search. Only worth running when a request payload shape
 changed: the triage schema, the enrichment tool definition, models, headers, or the
 system prompts in `src/Claude.gs`.

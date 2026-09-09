@@ -25,7 +25,7 @@ var CONFIG = {
   MAX_MESSAGES_PER_RUN: 50, // chunk size; keeps executions under the 6-minute cap
   MAX_BODY_CHARS: 4000,     // truncation before the email is sent to the API
 
-  MAX_ENRICH_PER_RUN: 3,    // cap Opus calls per execution (cost guard)
+  MAX_ENRICH_PER_RUN: 3,    // cap enrichment calls per execution (cost guard)
   ENRICH_MAX_SEARCHES: 3,   // web_search calls the research model may make per company
   ENRICH_MAX_FETCHES: 1,    // pages it may open to read a company's own site
 

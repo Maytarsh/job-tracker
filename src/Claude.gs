@@ -5,7 +5,7 @@
  * a cached system prompt, and structured outputs so the response parses
  * deterministically instead of being scraped out of prose.
  *
- * Enrichment runs once per company, ever, so it is accurate: Opus with the
+ * Enrichment runs once per company, ever, so it is accurate: Sonnet with the
  * web_search and web_fetch server tools. Its result comes back through a strict
  * tool call rather than output_config.format, because web search attaches
  * citations to text blocks and the API rejects citations alongside
