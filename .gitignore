@@ -3,3 +3,4 @@ test/.order.html
 __pycache__/
 *.pyc
 .venv/
+.idea/
