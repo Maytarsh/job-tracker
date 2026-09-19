@@ -7,10 +7,54 @@ var PROP_LAST_RUN = 'LAST_RUN_EPOCH';
 var BACKFILL_TRIGGER = 'runBackfill';
 var PROP_BACKFILL_CHUNKS = 'BACKFILL_CHUNKS';
 var PROP_BACKFILL_BEFORE = 'BACKFILL_BEFORE_EPOCH';
+var PROP_CURSOR_ADOPTED = 'CURSOR_ADOPTED_AT';
+var CURSOR_KEYS = [PROP_LAST_RUN, PROP_BACKFILL_CHUNKS, PROP_BACKFILL_BEFORE];
+
+/**
+ * Where this mailbox keeps its place in the mail.
+ *
+ * User Properties, not Script Properties. Two Gmail accounts can run this one
+ * bound script against one spreadsheet, each on its own trigger, and every
+ * Script Property is shared between them — so a single LAST_RUN_EPOCH means
+ * whichever account polls second finds the cursor already at now and looks
+ * back only OVERLAP_MINUTES. Everything its mailbox received before that has
+ * no _Processed row and is behind the cursor: outside every future window, in
+ * neither log, gone, with a full-looking sheet and nothing to say so. User
+ * Properties are scoped to the account whose trigger is running, so the two
+ * mailboxes cannot tread on each other's place.
+ *
+ * ANTHROPIC_API_KEY and SPEND_USD stay script-wide on purpose: one key, and
+ * one daily ceiling covering both accounts rather than two that each spend it.
+ */
+function cursorStore_() {
+  var user = PropertiesService.getUserProperties();
+  if (!user.getProperty(PROP_CURSOR_ADOPTED)) {
+    // Adopt the old single-account cursor, once. Starting empty instead would
+    // leave the first poll after this change with no cursor at all, so it
+    // would default to a POLL_MINUTES window and step straight over everything
+    // that arrived since the last real run — the very loss this split exists
+    // to prevent, caused by the fix for it. A second mailbox adopting the same
+    // value is harmless: it only reaches further back than it needs to, and
+    // collectMessages_ drops whatever is already in either log.
+    var script = PropertiesService.getScriptProperties();
+    for (var i = 0; i < CURSOR_KEYS.length; i++) {
+      var value = script.getProperty(CURSOR_KEYS[i]);
+      if (value !== null && user.getProperty(CURSOR_KEYS[i]) === null) {
+        user.setProperty(CURSOR_KEYS[i], value);
+      }
+    }
+    user.setProperty(PROP_CURSOR_ADOPTED, String(Date.now()));
+  }
+  return user;
+}
 
 /** Trigger entry point: everything since the last successful run. */
 function pollInbox() {
-  var props = PropertiesService.getScriptProperties();
+  return withBookLock_('pollInbox', pollInbox_);
+}
+
+function pollInbox_() {
+  var props = cursorStore_();
   var now = Math.floor(Date.now() / 1000);
   var lastRun = Number(props.getProperty(PROP_LAST_RUN)) ||
                 (now - CONFIG.POLL_MINUTES * 60);
@@ -43,16 +87,38 @@ function pollInbox() {
  * so a large backfill can't hit the 6-minute execution cap.
  */
 function runBackfill(event) {
-  clearBackfillTriggers_();
-  var props = PropertiesService.getScriptProperties();
-
   // A time-based trigger passes an event object; a menu click or an editor run
   // does not. So a continuation resumes where the last chunk stopped, while
   // starting it by hand always sweeps the window again from the newest end.
-  if (!event) {
-    props.deleteProperty(PROP_BACKFILL_BEFORE);
-    props.deleteProperty(PROP_BACKFILL_CHUNKS);
+  //
+  // Out here rather than inside the lock so that a start the lock defers still
+  // restarts, instead of quietly resuming a half-finished earlier sweep.
+  if (!event) resetBackfillCursor_();
+
+  var result = withBookLock_(BACKFILL_TRIGGER, runBackfill_);
+
+  // A chunk that could not take the lock must not simply end. It is the only
+  // thing carrying the backfill forward, so an execution that stops without
+  // queueing the next one leaves a part-swept window looking exactly like a
+  // finished one. Hand the baton to a fresh trigger and try again in a minute.
+  if (result === LOCK_BUSY) {
+    clearBackfillTriggers_();
+    ScriptApp.newTrigger(BACKFILL_TRIGGER).timeBased().after(60 * 1000).create();
+    Logger.log('backfill deferred by a minute: another run holds the lock');
   }
+  return result;
+}
+
+/** Forget where the last sweep reached, so the next one starts at the top. */
+function resetBackfillCursor_() {
+  var props = cursorStore_();
+  props.deleteProperty(PROP_BACKFILL_BEFORE);
+  props.deleteProperty(PROP_BACKFILL_CHUNKS);
+}
+
+function runBackfill_() {
+  clearBackfillTriggers_();
+  var props = cursorStore_();
 
   // A chunk counter, not just a drained-window check. The window draining is
   // what *should* end the backfill; this is the backstop for when it doesn't,
@@ -171,7 +237,7 @@ function processWindow_(afterEpoch, beforeEpoch, limit) {
       stats.skipped++;
       // Recorded by ID, so the window actually drains. Reconsidering these
       // after a prefilter change is an explicit action: Rescan skipped mail.
-      book.skipped.push([msg.id, msg.date, msg.from, msg.subject]);
+      book.skipped.push([msg.id, msg.date, msg.from, msg.subject, mailboxEmail_()]);
       continue;
     }
 
@@ -192,7 +258,7 @@ function processWindow_(afterEpoch, beforeEpoch, limit) {
         consecutiveFailures = 0;
         book.processed.push([
           msg.id, msg.date, msg.from, msg.subject, '', '', '', '', '',
-          'failed: ' + String(err.message).substring(0, 200)
+          'failed: ' + String(err.message).substring(0, 200), mailboxEmail_()
         ]);
         Logger.log('could not classify ' + msg.id + ': ' + err.message);
         continue;
@@ -234,7 +300,8 @@ function processWindow_(afterEpoch, beforeEpoch, limit) {
 
     book.processed.push([
       msg.id, msg.date, msg.from, msg.subject, triage.category,
-      triage.company, triage.role, triage.confidence, triage.evidence, action
+      triage.company, triage.role, triage.confidence, triage.evidence, action,
+      mailboxEmail_()
     ]);
   }
 
@@ -253,8 +320,17 @@ var WRITE_CATEGORIES = {
   offer: true
 };
 
-/** Daily: Open rows that have gone quiet become Ghosted. Status stays Open. */
+/**
+ * Daily: Open rows that have gone quiet become Ghosted. Status stays Open.
+ *
+ * Both accounts install this trigger and it reads no mail, so the two runs do
+ * the identical job. One of them losing the lock to the other costs nothing.
+ */
 function markStale() {
+  return withBookLock_('markStale', markStale_);
+}
+
+function markStale_() {
   var book = openBook_();
   var cutoff = new Date(Date.now() - CONFIG.STALE_DAYS * 86400 * 1000);
   var flagged = 0;

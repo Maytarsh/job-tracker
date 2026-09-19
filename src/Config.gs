@@ -80,10 +80,13 @@ var TABS = {
   SKIPPED: '_Skipped'
 };
 
+// Account is last on purpose. Every A_* index and every $-reference in
+// quietFormula_ and the conditional formats is positional, so a column added
+// anywhere else would have to be threaded through all of them.
 var APP_HEADERS = [
   'Company', 'Role', 'Market', 'Description', 'Status', 'Stage',
   'Date applied', 'Last update', 'Days quiet', 'Source / ATS',
-  'Job link', 'Location', 'Email link', 'Confidence', 'Notes'
+  'Job link', 'Location', 'Email link', 'Confidence', 'Notes', 'Account'
 ];
 
 var COMPANY_HEADERS = [
@@ -93,14 +96,20 @@ var COMPANY_HEADERS = [
 
 var PROCESSED_HEADERS = [
   'Message ID', 'Date', 'From', 'Subject', 'Category',
-  'Company', 'Role', 'Confidence', 'Evidence', 'Action'
+  'Company', 'Role', 'Confidence', 'Evidence', 'Action', 'Account'
 ];
 
-var SKIPPED_HEADERS = ['Message ID', 'Date', 'From', 'Subject'];
+var SKIPPED_HEADERS = ['Message ID', 'Date', 'From', 'Subject', 'Account'];
 
 // _Processed column index + marker for rehearsal rows, which never count as done.
 var P_ACTION = 9;
 var DRY_RUN_ACTION = 'dry-run';
+
+// Which mailbox examined the message. Both logs carry it, because both feed
+// the coverage report and a mailbox that was never swept has to be tellable
+// from one with no job mail in it — per account, not just overall.
+var P_ACCOUNT = 10;
+var S_ACCOUNT = 4;
 
 /** Controlled vocabulary for the Market column. */
 var MARKETS = [

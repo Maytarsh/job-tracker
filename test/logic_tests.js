@@ -482,7 +482,7 @@ t('rescanning clears skipped mail for reconsideration', function () {
 
 t('a skipped row carries the message ID first', function () {
   eq(SKIPPED_HEADERS[0], 'Message ID');
-  eq(SKIPPED_HEADERS.length, 4);
+  eq(SKIPPED_HEADERS.length, 5);
 });
 
 
@@ -955,4 +955,169 @@ t('a fetched page is capped before it enters the conversation', function () {
   ok(fetch, 'web fetch is declared');
   eq(fetch.max_content_tokens, CONFIG.ENRICH_MAX_FETCH_TOKENS);
   ok(fetch.max_content_tokens > 0, 'an uncapped fetch is what caused this');
+});
+
+
+// -------------------------------------------- two mailboxes, one spreadsheet
+// Both accounts run this same bound script against this same sheet, each on
+// its own trigger and reading its own Gmail. Everything below is what stops
+// them from treading on each other — and the failure in every case is the
+// quiet one: mail nothing ever looks at again, or rows written over.
+
+function withMailbox(address, fn) {
+  var savedResolved = MAILBOX_EMAIL_;
+  var savedStub = MAILBOX_STUB_;
+  MAILBOX_EMAIL_ = null;   // drop the memo so the stub is consulted again
+  MAILBOX_STUB_ = address;
+  try { return fn(); } finally {
+    MAILBOX_EMAIL_ = savedResolved;
+    MAILBOX_STUB_ = savedStub;
+  }
+}
+
+function withStores(scriptSeed, userSeed, fn) {
+  var original = PropertiesService;
+  var script = fakeStore_(scriptSeed);
+  var user = fakeStore_(userSeed);
+  PropertiesService = {
+    getScriptProperties: function () { return script; },
+    getUserProperties: function () { return user; }
+  };
+  try { return fn(script, user); } finally { PropertiesService = original; }
+}
+
+t('every log row has a column for the mailbox that wrote it', function () {
+  eq(APP_HEADERS[A_ACCOUNT], 'Account');
+  eq(PROCESSED_HEADERS[P_ACCOUNT], 'Account');
+  eq(SKIPPED_HEADERS[S_ACCOUNT], 'Account');
+  // Appended, never inserted: every other index is positional, and so are the
+  // $-references in quietFormula_ and the conditional formats.
+  eq(A_ACCOUNT, APP_HEADERS.length - 1);
+});
+
+t('an email link addresses the mailbox the mail is in', function () {
+  withMailbox('second@gmail.com', function () {
+    // /u/0 means "whichever account you signed into first", so with two
+    // mailboxes half the Email links would open the wrong one and find nothing.
+    eq(threadUrl_('abc123'),
+       'https://mail.google.com/mail/u/second%40gmail.com/#all/abc123');
+  });
+});
+
+t('an unidentified mailbox still produces a usable link', function () {
+  withMailbox('', function () {
+    eq(threadUrl_('abc123'), 'https://mail.google.com/mail/u/0/#all/abc123');
+  });
+});
+
+t('a mailbox adopts the old shared cursor exactly once', function () {
+  withStores({ LAST_RUN_EPOCH: '1000' }, {}, function (script, user) {
+    // Starting empty would leave the first poll after this change defaulting to
+    // a POLL_MINUTES window, stepping over everything since the last real run.
+    eq(cursorStore_().getProperty(PROP_LAST_RUN), '1000', 'adopted');
+    cursorStore_().setProperty(PROP_LAST_RUN, '5000');
+    script._data.LAST_RUN_EPOCH = '9999';
+    eq(cursorStore_().getProperty(PROP_LAST_RUN), '5000',
+       'and keeps its own place afterwards');
+    eq(script._data.LAST_RUN_EPOCH, '9999', 'the script-wide value is left alone');
+  });
+});
+
+t('one mailbox moving its cursor cannot move the other one', function () {
+  var shared = { LAST_RUN_EPOCH: '1000' };
+  withStores(shared, {}, function () { cursorStore_().setProperty(PROP_LAST_RUN, '8000'); });
+  // The second account: same script properties, its own user properties.
+  withStores(shared, {}, function () {
+    eq(cursorStore_().getProperty(PROP_LAST_RUN), '1000',
+       'the second mailbox must not inherit where the first one got to');
+  });
+});
+
+t('a run that cannot take the lock does nothing at all', function () {
+  LOCK_HELD_ = true;
+  try {
+    var ran = false;
+    var out = withBookLock_('test', function () { ran = true; return 'wrote'; });
+    ok(!ran, 'the body never runs, so no cursor moves and nothing is flushed');
+    ok(out === LOCK_BUSY, 'and the caller can tell the difference from a result');
+  } finally { LOCK_HELD_ = false; }
+});
+
+t('the lock is released even when the run throws', function () {
+  try {
+    withBookLock_('test', function () { throw new Error('boom'); });
+  } catch (e) { /* expected */ }
+  var ran = false;
+  withBookLock_('test', function () { ran = true; });
+  ok(ran, 'a stuck lock would freeze both accounts out for good');
+});
+
+t('coverage is reported per mailbox, not merged into one date', function () {
+  function logRow(headers, accountIndex, id, date, account) {
+    var r = new Array(headers.length).fill('');
+    r[0] = id;
+    r[1] = date;
+    r[accountIndex] = account;
+    return r;
+  }
+  withTabs(
+    [logRow(PROCESSED_HEADERS, P_ACCOUNT, 'p1', '2026-01-10', 'first@gmail.com'),
+     logRow(PROCESSED_HEADERS, P_ACCOUNT, 'p2', '2026-06-01', 'second@gmail.com')],
+    [logRow(SKIPPED_HEADERS, S_ACCOUNT, 's1', '2026-02-20', 'second@gmail.com'),
+     logRow(SKIPPED_HEADERS, S_ACCOUNT, 's2', '2026-03-01', '')],
+    function () {
+      var swept = oldestExaminedByAccount_();
+      eq(swept['first@gmail.com'].toDateString(), new Date('2026-01-10').toDateString());
+      // Merged, this would read January and imply the second mailbox was swept
+      // back that far too. It was not: it has never seen anything before March.
+      eq(swept['second@gmail.com'].toDateString(), new Date('2026-02-20').toDateString(),
+         'the earlier date belongs to the other account');
+      ok(swept[''], 'rows written before the column existed still count');
+    });
+});
+
+t('setup repairs a header row a new column has outgrown', function () {
+  // Adding Account to *_HEADERS is only half the job: an existing sheet keeps
+  // the header row it was created with, and setup() used to write headers only
+  // into a brand-new tab, so the column would stay an unlabelled blank forever.
+  var stale = APP_HEADERS.slice(0, APP_HEADERS.length - 1).concat(['']);
+  var written = null;
+  function fakeTab(header) {
+    return {
+      getMaxColumns: function () { return 26; },
+      insertColumnsAfter: function () { throw new Error('26 columns is plenty'); },
+      setFrozenRows: function () {},
+      getRange: function (r, c, n, w) {
+        return {
+          getValues: function () { return [header.slice(c - 1, c - 1 + w)]; },
+          setValues: function (v) { written = v[0]; },
+          setFontWeight: function () { return this; }
+        };
+      }
+    };
+  }
+  function ss(sheet) { return { getSheetByName: function () { return sheet; } }; }
+
+  ensureTab_(ss(fakeTab(stale)), TABS.APPLICATIONS, APP_HEADERS);
+  eq(written, APP_HEADERS, 'the drifted header is rewritten in full');
+
+  written = null;
+  ensureTab_(ss(fakeTab(APP_HEADERS.slice())), TABS.APPLICATIONS, APP_HEADERS);
+  eq(written, null, 'a header that already matches is left alone');
+});
+
+t('the never-swept warning fires for a silent mailbox', function () {
+  ok(sweptNothing_(['first@gmail.com'], 'second@gmail.com'),
+     'the second account has examined nothing and must be told so');
+  ok(!sweptNothing_(['first@gmail.com', 'second@gmail.com'], 'second@gmail.com'),
+     'an account on record is not warned about');
+});
+
+t('the warning stays quiet when nothing can be attributed yet', function () {
+  // Immediately after the Account column is added every existing row is blank,
+  // so a mailbox backfilled for months looks exactly like one that never ran.
+  // A warning here would be noise, and this is the one warning worth reading.
+  ok(!sweptNothing_([''], 'first@gmail.com'), 'unattributed history proves nothing');
+  ok(!sweptNothing_([], 'first@gmail.com'), 'an empty sheet is not a silent mailbox');
+  ok(!sweptNothing_(['first@gmail.com'], ''), 'and an unidentifiable account cannot be judged');
 });
