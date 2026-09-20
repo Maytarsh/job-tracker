@@ -97,6 +97,44 @@ run with `DRY_RUN = false` clears those rehearsal rows first and logs how many.
 
 The 30-minute trigger keeps it current from then on.
 
+## Two Gmail accounts, one Sheet
+
+Both accounts run this same bound script against this same spreadsheet, each reading
+its own mailbox on its own trigger. Nothing is duplicated: one project, one API key,
+one daily ceiling.
+
+1. **Share the spreadsheet** with the second account as an **Editor**.
+2. Signed in as that account, open the Sheet → **Extensions → Apps Script** → **Run
+   `setup`**, and authorize the same way as the first time. The confirmation dialog
+   names the mailbox it just wired up — that is how you catch having authorized the
+   wrong Google account, which is otherwise invisible until mail goes missing.
+3. **Run `runBackfill` from that account too.** The poll only looks forward, and both
+   only ever sweep the mailbox they are run from, so the second account's history is
+   reachable only from the second account.
+4. **Turn on failure notifications** for its `pollInbox` trigger (Setup step 6). The
+   setting belongs to the trigger, and each account has its own triggers.
+5. **Coverage report** now prints one *mail examined back to* line per account, and
+   says so in as many words when the account you are signed in as has swept nothing.
+   That is the check that matters here — a mailbox nobody ever backfilled contributes
+   no rows and no log lines, which looks exactly like a mailbox with no job mail in it.
+
+| Shared by both accounts | Per account |
+|---|---|
+| The spreadsheet and every tab | The Gmail mailbox being read |
+| `ANTHROPIC_API_KEY` and `SPEND_USD` — one key, one daily ceiling | Where the poll and the backfill have got to |
+| `CONFIG`, being the same pasted file | The `pollInbox` and `markStale` triggers, and their failure notifications |
+
+Runs are serialised by a script-wide lock, because the whole table is read into memory
+and written back at the end, so two runs flushing at once would write over each other's
+rows. A run that cannot take the lock does nothing and leaves its cursor where it was,
+so its window is swept by the next run; a backfill chunk re-queues itself instead,
+since one that simply stopped would leave a part-swept window looking finished.
+
+**Forwarding instead.** Auto-forwarding the second account's mail into the first needs
+no setup at all and is a fair choice for a low-volume account. It cannot reach that
+mailbox's history, though — forwarding only ever applies to new mail — and manual
+forwards are excluded by the `-from:me` in the Gmail query.
+
 ## The Sheet
 
 **`Applications`** — the point of the whole thing.
@@ -109,9 +147,10 @@ The 30-minute trigger keeps it current from then on.
 | Stage | Applied → Screening → Interview → Offer → Rejected → Ghosted |
 | Date applied, Last update | from the emails |
 | Days quiet | formula, rewritten across every row each run; blank once closed |
-| Email link | back to the original Gmail thread |
+| Email link | back to the original Gmail thread, in the mailbox it arrived in |
 | Confidence | `low` = worth checking. Also set when a row match had to be guessed |
 | **Notes** | **yours — the automation never reads or writes this column** |
+| Account | which mailbox last updated the row — only interesting if you run two |
 
 Rows are kept sorted by **Last update**, newest first, so whatever an email just
 touched is directly under the header. The sort runs at the end of every write, over

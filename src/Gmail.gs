@@ -91,7 +91,39 @@ function isCandidate_(msg) {
   return false;
 }
 
-/** Clickable link back to the source thread. */
+/**
+ * Which mailbox this execution is reading.
+ *
+ * Resolved lazily and memoised, never in a top-level var: Session is a service
+ * call, and the file it would sit in is evaluated before the one that needs it.
+ *
+ * Empty is a valid answer — a container-bound script can run in contexts where
+ * the address is not disclosed — so every caller has to cope with '' rather
+ * than assume an identity. It is only ever a label and a link prefix; nothing
+ * routes mail or picks a cursor by it.
+ */
+var MAILBOX_EMAIL_ = null;
+function mailboxEmail_() {
+  if (MAILBOX_EMAIL_ === null) {
+    try {
+      MAILBOX_EMAIL_ = Session.getEffectiveUser().getEmail() || '';
+    } catch (err) {
+      Logger.log('could not resolve the mailbox address: ' + err);
+      MAILBOX_EMAIL_ = '';
+    }
+  }
+  return MAILBOX_EMAIL_;
+}
+
+/**
+ * Clickable link back to the source thread.
+ *
+ * Addressed by mailbox rather than by /u/0, which means "whichever account you
+ * happen to be signed into first". With two accounts writing one sheet, half
+ * the Email links would open the wrong mailbox and land on nothing.
+ */
 function threadUrl_(threadId) {
-  return 'https://mail.google.com/mail/u/0/#all/' + threadId;
+  var mailbox = mailboxEmail_();
+  return 'https://mail.google.com/mail/u/' +
+         (mailbox ? encodeURIComponent(mailbox) : '0') + '/#all/' + threadId;
 }

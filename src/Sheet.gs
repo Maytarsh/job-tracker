@@ -8,7 +8,8 @@
 // Applications column indices (0-based, must match APP_HEADERS).
 var A_COMPANY = 0, A_ROLE = 1, A_MARKET = 2, A_DESC = 3, A_STATUS = 4,
     A_STAGE = 5, A_APPLIED = 6, A_UPDATED = 7, A_QUIET = 8, A_ATS = 9,
-    A_JOB_URL = 10, A_LOCATION = 11, A_EMAIL = 12, A_CONF = 13, A_NOTES = 14;
+    A_JOB_URL = 10, A_LOCATION = 11, A_EMAIL = 12, A_CONF = 13, A_NOTES = 14,
+    A_ACCOUNT = 15;
 
 // Stage ordering, so an out-of-order email can never move a row backwards.
 var STAGE_RANK = { 'Applied': 1, 'Screening': 2, 'Interview': 3, 'Offer': 4 };
@@ -87,6 +88,43 @@ function getSheet_(name) {
   var sheet = SpreadsheetApp.getActive().getSheetByName(name);
   if (!sheet) throw new Error('Missing tab "' + name + '". Run setup() first.');
   return sheet;
+}
+
+/**
+ * Returned by withBookLock_ when the lock was already held. A sentinel object
+ * rather than null, which several of these entry points return on their own.
+ */
+var LOCK_BUSY = { lockBusy: true };
+
+/**
+ * Serialise everything that reads the book and writes it back.
+ *
+ * openBook_ loads the whole table into memory and flushBook_ writes it out
+ * again, appending at getLastRow() + 1. Two mailboxes polling the same
+ * spreadsheet at the same moment therefore read the same table and the second
+ * flush writes its stale copy over the first one's rows and its appends over
+ * the first one's appends — rows that existed a second ago, gone, with both
+ * executions logging success. One script-wide lock held across the whole
+ * read-modify-write is the only thing that prevents it.
+ *
+ * tryLock(0), not waitLock: RUN_BUDGET_SECONDS is measured against the
+ * 6-minute kill, and queueing spends exactly the budget the run needs to
+ * finish and flush. Giving up costs nothing as long as the caller leaves its
+ * cursor alone — the window stays unswept and the next poll sweeps it — which
+ * is why the bail-out happens out here, before any cursor is touched.
+ */
+function withBookLock_(what, fn) {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(0)) {
+    Logger.log(what + ': another run holds the lock, skipping this one. ' +
+               'No cursor moved, so the window is swept by the next run.');
+    return LOCK_BUSY;
+  }
+  try {
+    return fn();
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 /** Load the whole workbook state into one object. */
@@ -436,6 +474,11 @@ function upsertApplication_(book, triage, msg) {
       row[A_DESC] = safeCell_(refreshed.description, 600);
     }
     row[A_EMAIL] = threadUrl_(msg.threadId);
+    // The mailbox that last moved this row, matching Email link beside it. Not
+    // a list of every account that ever touched it: the column exists so a row
+    // can be traced back to the inbox it came from, and the link only ever
+    // points at one of them.
+    row[A_ACCOUNT] = safeCell_(mailboxEmail_(), 120);
     // A guessed row match is worth auditing even if the extraction was clean.
     row[A_CONF] = hit.exact ? triage.confidence : 'low';
     // Rows in `appended` have not been written yet — they flush as inserts,
@@ -459,6 +502,7 @@ function upsertApplication_(book, triage, msg) {
   fresh[A_LOCATION] = safeCell_(triage.location, 120);
   fresh[A_EMAIL] = threadUrl_(msg.threadId);
   fresh[A_CONF] = triage.confidence;
+  fresh[A_ACCOUNT] = safeCell_(mailboxEmail_(), 120);
   // findRow_ searches `appended` too, so a second email for the same company
   // later in this run updates this row instead of creating a duplicate.
   book.appended.push(fresh);

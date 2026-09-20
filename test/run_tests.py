@@ -15,11 +15,48 @@ SRC = os.path.join(ROOT, "src")
 STUBS = """
 var Logger = { log: function () {} };
 var Utilities = { sleep: function () {} };
+
+// A real key/value store rather than a constant, because the poll cursor now
+// lives in user properties and the tests have to show the two kinds staying
+// apart - a stub that answered everything the same would hide exactly the
+// mix-up that loses a second mailbox's mail.
+function fakeStore_(seed) {
+  var data = seed || {};
+  return {
+    _data: data,
+    getProperty: function (k) { return k in data ? data[k] : null; },
+    setProperty: function (k, v) { data[k] = String(v); },
+    deleteProperty: function (k) { delete data[k]; }
+  };
+}
+var SCRIPT_PROPS_ = fakeStore_({ ANTHROPIC_API_KEY: 'stub-key' });
+var USER_PROPS_ = fakeStore_({});
 var PropertiesService = {
-  getScriptProperties: function () {
-    return { getProperty: function () { return 'stub-key'; }, setProperty: function () {} };
+  getScriptProperties: function () { return SCRIPT_PROPS_; },
+  getUserProperties: function () { return USER_PROPS_; }
+};
+
+var LOCK_HELD_ = false;
+var LockService = {
+  getScriptLock: function () {
+    return {
+      tryLock: function () {
+        if (LOCK_HELD_) return false;
+        LOCK_HELD_ = true;
+        return true;
+      },
+      releaseLock: function () { LOCK_HELD_ = false; }
+    };
   }
 };
+
+var MAILBOX_STUB_ = 'first@gmail.com';
+var Session = {
+  getEffectiveUser: function () {
+    return { getEmail: function () { return MAILBOX_STUB_; } };
+  }
+};
+
 var UrlFetchApp = { fetch: function () { throw new Error('no network in logic tests'); } };
 var GmailApp = { search: function () { return []; } };
 var SpreadsheetApp = { getActive: function () { throw new Error('no sheet in logic tests'); } };

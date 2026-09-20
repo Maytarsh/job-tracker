@@ -19,20 +19,40 @@ function setup() {
 
   var hasKey = !!PropertiesService.getScriptProperties()
     .getProperty('ANTHROPIC_API_KEY');
-  var msg = 'Tabs and triggers are ready.\n\n' +
+  // Which mailbox this just wired up, because setup() is how a second account
+  // joins: it is run once from each, and the triggers it installs belong to
+  // whoever ran it. Seeing the wrong address here means the wrong Google
+  // account is signed in, which is otherwise invisible until mail goes missing.
+  var msg = 'Tabs and triggers are ready for ' +
+    (mailboxEmail_() || 'this account') + '.\n\n' +
     (hasKey ? '✓ ANTHROPIC_API_KEY is set.'
             : '✗ ANTHROPIC_API_KEY is NOT set — Project Settings → Script Properties.') +
-    '\n\nDRY_RUN is currently ' + CONFIG.DRY_RUN + '.';
+    '\n\nDRY_RUN is currently ' + CONFIG.DRY_RUN + '.' +
+    '\n\nThis account has swept no mail until you run Backfill history from it.';
   Logger.log(msg);
   try { SpreadsheetApp.getUi().alert('Job Tracker', msg, SpreadsheetApp.getUi().ButtonSet.OK); }
   catch (e) { /* no UI when run from the editor */ }
 }
 
+/**
+ * Create the tab if it is missing, and keep its header row matching *_HEADERS.
+ *
+ * Rewriting the header whenever it has drifted, not only when the tab is brand
+ * new: a column appended to a *_HEADERS list after the sheet already existed
+ * would otherwise stay an unlabelled blank that re-running setup() could never
+ * repair. Every index into these rows is positional anyway, so the labels are
+ * the automation's to own.
+ */
 function ensureTab_(ss, name, headers) {
   var sheet = ss.getSheetByName(name) || ss.insertSheet(name);
-  if (sheet.getLastRow() === 0) {
-    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
-  }
+
+  var short = headers.length - sheet.getMaxColumns();
+  if (short > 0) sheet.insertColumnsAfter(sheet.getMaxColumns(), short);
+
+  var current = sheet.getRange(1, 1, 1, headers.length).getValues()[0];
+  var drifted = headers.some(function (label, i) { return current[i] !== label; });
+  if (drifted) sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+
   sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold');
   sheet.setFrozenRows(1);
   return sheet;
@@ -117,8 +137,23 @@ function onOpen() {
     .addToUi();
 }
 
+/**
+ * Every menu action below that writes the sheet takes the same lock the poll
+ * does. A click landing while a trigger is mid-run would otherwise read the
+ * table the run is about to replace, and flush its stale copy over the top.
+ */
+function busyToast_() {
+  toast_('Another run is using the sheet right now — try again in a minute.');
+}
+
 /** Drop cached profiles for the selected Applications rows and research again. */
 function menuReEnrichSelected() {
+  if (withBookLock_('menuReEnrichSelected', menuReEnrichSelected_) === LOCK_BUSY) {
+    busyToast_();
+  }
+}
+
+function menuReEnrichSelected_() {
   var sheet = SpreadsheetApp.getActiveSheet();
   if (sheet.getName() !== TABS.APPLICATIONS) {
     return toast_('Select rows on the Applications tab first.');
@@ -187,12 +222,22 @@ function menuReplaySelected() {
     return toast_('Select rows on the _Processed tab first (Job Tracker → unhide it).');
   }
   var sel = sheet.getActiveRange();
+  var first = sel.getRow();
   var count = sel.getNumRows();
-  sheet.deleteRows(sel.getRow(), count);
-  // Backfill, not pollInbox: the incremental window only reaches back
-  // POLL_MINUTES, which would not re-fetch an older email.
-  toast_('Cleared ' + count + ' row(s) — replaying over the backfill window…');
-  runBackfill();
+
+  // The delete and the re-sweep go under one lock, and the sweep calls the
+  // unlocked core: between the two the messages belong to nobody, and this
+  // same lock is not re-entrant.
+  var replayed = withBookLock_('menuReplaySelected', function () {
+    sheet.deleteRows(first, count);
+    // Backfill, not pollInbox: the incremental window only reaches back
+    // POLL_MINUTES, which would not re-fetch an older email.
+    toast_('Cleared ' + count + ' row(s) — replaying over the backfill window…');
+    resetBackfillCursor_();
+    return runBackfill_();
+  });
+
+  if (replayed === LOCK_BUSY) return busyToast_();
   toast_('Replay complete. Check _Processed for the new rows.');
 }
 
@@ -207,7 +252,9 @@ function menuReplaySelected() {
  * rather than trusting a full-looking table.
  */
 function menuCoverage() {
-  var oldest = oldestExaminedDate_();
+  var swept = oldestExaminedByAccount_();
+  var accounts = Object.keys(swept).sort();
+  var me = mailboxEmail_();
   var book = openBook_();
   var missing = unwrittenCompanies_(book);
   var blanks = 0;
@@ -216,16 +263,34 @@ function menuCoverage() {
   });
 
   var unclassified = countUnclassified_();
-  var lines = [
-    oldest
-      ? 'Mail examined back to: ' + oldest.toDateString()
-      : 'No mail examined yet — run Backfill history.',
-    'Spent today: $' + spendToday_().toFixed(2) +
-      ' of $' + CONFIG.DAILY_BUDGET_USD.toFixed(2),
-    'Application rows: ' + book.rows.length,
-    'Rows still missing a Market: ' + blanks +
-      (blanks ? ' (Fill in missing company profiles)' : '')
-  ];
+  var lines = [];
+
+  if (!accounts.length) {
+    lines.push('No mail examined yet — run Backfill history.');
+  } else {
+    accounts.forEach(function (who) {
+      lines.push('Mail examined back to, ' + (who || 'unidentified account') +
+                 ': ' + swept[who].toDateString());
+    });
+  }
+
+  // The question this report exists to answer, asked per mailbox now. A second
+  // account nobody ever backfilled contributes no rows and no log lines, which
+  // is indistinguishable from an account that simply gets no job mail — and
+  // the total above would be quietly carried by the other one.
+  if (sweptNothing_(accounts, me)) {
+    lines.push('⚠ ' + me + ' has examined nothing. Run Backfill history while ' +
+               'signed in as this account.');
+  }
+
+  lines.push('This account (' + (me || 'unidentified') + ') polls from: ' +
+             pollCursorDescription_());
+  lines.push('Spent today: $' + spendToday_().toFixed(2) +
+             ' of $' + CONFIG.DAILY_BUDGET_USD.toFixed(2) +
+             ' (one ceiling, shared by every account)');
+  lines.push('Application rows: ' + book.rows.length);
+  lines.push('Rows still missing a Market: ' + blanks +
+             (blanks ? ' (Fill in missing company profiles)' : ''));
 
   if (unclassified) {
     lines.push('Messages that could not be classified: ' + unclassified +
@@ -240,9 +305,11 @@ function menuCoverage() {
   }
 
   lines.push('');
-  lines.push('Anything older than the first date above has never been looked at. ' +
-             'Backfill history is the only thing that reaches it — the 30-minute ' +
-             'poll only ever looks forward.');
+  lines.push('Anything older than the dates above has never been looked at. ' +
+             'Backfill history is the only thing that reaches it — the ' +
+             CONFIG.POLL_MINUTES + '-minute poll only ever looks forward. Both ' +
+             'only ever sweep the mailbox they are run from, so each account ' +
+             'needs its own backfill.');
 
   var msg = lines.join('\n');
   Logger.log(msg);
@@ -265,21 +332,63 @@ function countUnclassified_() {
   return count;
 }
 
-/** The earliest message either log has a record of examining. */
-function oldestExaminedDate_() {
-  var oldest = null;
-  [TABS.PROCESSED, TABS.SKIPPED].forEach(function (tab) {
-    var sheet = getSheet_(tab);
+/**
+ * The earliest message each mailbox has a record of examining, from both logs.
+ *
+ * Keyed by account rather than reduced to one date: with two mailboxes writing
+ * one sheet, a single overall figure is the *better* swept of the two, and it
+ * would report a thoroughly-backfilled account as though it covered mail the
+ * other account has never looked at.
+ *
+ * Rows written before the Account column existed have no account on them; they
+ * group under '' and print as an unidentified account rather than being
+ * dropped, because they are still evidence that something was examined.
+ */
+function oldestExaminedByAccount_() {
+  var oldest = {};
+  var logs = [
+    { tab: TABS.PROCESSED, width: PROCESSED_HEADERS.length, account: P_ACCOUNT },
+    { tab: TABS.SKIPPED, width: SKIPPED_HEADERS.length, account: S_ACCOUNT }
+  ];
+
+  logs.forEach(function (log) {
+    var sheet = getSheet_(log.tab);
     var last = sheet.getLastRow();
     if (last < 2) return;
-    sheet.getRange(2, 2, last - 1, 1).getValues().forEach(function (r) {
-      if (!r[0]) return;
-      var date = new Date(r[0]);
+    sheet.getRange(2, 1, last - 1, log.width).getValues().forEach(function (r) {
+      if (!r[1]) return;
+      var date = new Date(r[1]);
       if (isNaN(date.getTime())) return;
-      if (!oldest || date < oldest) oldest = date;
+      var who = String(r[log.account] || '');
+      if (!oldest[who] || date < oldest[who]) oldest[who] = date;
     });
   });
   return oldest;
+}
+
+/**
+ * Should the report warn that the account running it has swept nothing?
+ *
+ * Only once some *other* account is on record. Every row written before the
+ * Account column existed is unattributed, so on the first run after that change
+ * a mailbox backfilled for months looks identical to one that has never run.
+ * Crying wolf there is not a harmless false alarm: this is the one warning on
+ * this screen worth reacting to, and it only works if it is never noise.
+ */
+function sweptNothing_(accounts, me) {
+  if (!me) return false;
+  var identified = accounts.filter(function (who) { return !!who; });
+  return identified.length > 0 && identified.indexOf(me) === -1;
+}
+
+/** Where this mailbox's incremental poll will pick up from next. */
+function pollCursorDescription_() {
+  var epoch = Number(cursorStore_().getProperty(PROP_LAST_RUN));
+  if (!epoch) {
+    return 'nothing recorded yet — the next poll looks back ' +
+           CONFIG.POLL_MINUTES + ' minutes';
+  }
+  return new Date(epoch * 1000).toString();
 }
 
 /**
@@ -312,6 +421,12 @@ function unwrittenCompanies_(book) {
 
 /** Research every row whose Market is still blank, within one run's budget. */
 function menuEnrichMissing() {
+  if (withBookLock_('menuEnrichMissing', menuEnrichMissing_) === LOCK_BUSY) {
+    busyToast_();
+  }
+}
+
+function menuEnrichMissing_() {
   var book = openBook_();
   book.deadline = Date.now() + CONFIG.RUN_BUDGET_SECONDS * 1000;
   var filled = fillMissingProfiles_(book);
@@ -329,6 +444,12 @@ function menuEnrichMissing() {
 
 /** Clear _Skipped so a widened prefilter reconsiders that mail. */
 function menuRescanSkipped() {
+  if (withBookLock_('menuRescanSkipped', menuRescanSkipped_) === LOCK_BUSY) {
+    busyToast_();
+  }
+}
+
+function menuRescanSkipped_() {
   var cleared = clearSkipped_();
   toast_('Cleared ' + cleared + ' skipped row(s). Run Backfill history to reconsider them.');
 }
