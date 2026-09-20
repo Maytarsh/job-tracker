@@ -17,6 +17,7 @@ Daily trigger ────────▶ markStale()   Open + silent 30 days �
 | `src/` | **Everything that goes into Apps Script.** Pushed by CI, or pasted by hand. |
 | `tools/probe.py` | Validates both API payload shapes against the live API. Local only. |
 | `test/` | Logic suite, run in headless Firefox. Local only. |
+| `dist/JobTracker.gs` | Generated: all of `src/` in one file, for installs updated by hand. |
 | `.github/workflows/` | Tests on every PR; a manual [clasp](https://github.com/google/clasp) deploy. Local only. |
 
 Only `src/` reaches Google — see [Deploying from CI](#deploying-from-ci) to push it
@@ -36,7 +37,11 @@ instead of pasting it.
    setup is by hand either way.
 3. **Add your API key.** Project Settings (⚙️) → Script Properties → *Add script
    property*: `ANTHROPIC_API_KEY` = your key from console.anthropic.com → *Save*.
-   It lives only there — never in the Sheet, so sharing the Sheet never leaks it.
+   It lives only there, never in a cell, so sharing the Sheet **read-only** does not
+   expose it. Sharing it as an **Editor** does: a bound script inherits the container's
+   access list, and anyone who can edit a script can open Project Settings or add a line
+   that logs the key. Never give someone Editor access to a Sheet whose script holds
+   your key.
 4. **Run `setup()`.** Creates the four tabs, the formatting, and both triggers.
    - **Save first** (`Ctrl+S`). Until you do, the toolbar says *No functions* and Run
      is greyed out — the editor only re-scans on save. This looks exactly like a
@@ -252,6 +257,7 @@ first use.
 ```bash
 uv run python tools/probe.py [Company] [Location]   # one real triage + one real enrich
 uv run python test/run_tests.py          # logic suite (needs Firefox)
+uv run python tools/bundle.py            # rebuild dist/JobTracker.gs after editing src/
 ```
 
 Run `probe.py` before porting any API change — it validates the payload shapes outside
@@ -362,42 +368,53 @@ You can then still deploy any branch by picking it in the *Use workflow from* dr
 `clasp push` replaces the project's whole file set, so deleting a file from `src/`
 deletes it in the project — including the default `Code.gs` stub, if it's still there.
 
-### Running an independent install
+### Running your own install
 
 Every install is separate: its own Sheet, its own Apps Script project, its own
-`ANTHROPIC_API_KEY` in Script Properties, its own bill. Nothing is shared between them
-and there is no central account. To track your own mail from this repo:
+`ANTHROPIC_API_KEY` in Script Properties, its own bill. There is no central account and
+no shared anything.
 
-1. **Fork it.** You need somewhere to hold your own secrets, and they cannot go in
-   someone else's repository.
-2. **Enable Actions on the fork.** GitHub disables workflows on a new fork until the
-   owner confirms it in the Actions tab. Nothing runs until you do.
-3. **Do the [Setup](#setup) by hand** — the Sheet, the API key, `setup()`, the
-   triggers, the failure alert. A script that isn't bound to a Sheet cannot be fixed by
-   pushing files at it, so this part is not automatable.
-4. **Do [One-time setup](#one-time-setup) above** against your own Google account: your
-   own `clasp login`, your own `SCRIPT_ID`, and `APPS_SCRIPT_TIMEZONE` if you are not in
-   the timezone this repo happens to be committed with.
-5. **Deploy.** The first run always needs **Push Config.gs too** ticked, because there
-   is no `deployed` tag yet.
+**Nobody else can deploy for you, and you should not ask them to.** Pushing code to a
+bound script requires edit access to its container, and edit access to a script means
+being able to read the API key out of Script Properties. So an offer to "just deploy it
+for you" is an offer to hand over your key and your data. Do the paste instead — it is
+two minutes.
+
+#### Updating by hand — no GitHub account, no terminal
+
+[`dist/JobTracker.gs`](dist/JobTracker.gs) is every `src/*.gs` concatenated in the order
+Apps Script evaluates them, so one file behaves exactly as the six do. CI fails if it
+falls out of step with `src/`, so the copy on `main` is always the current code.
+
+1. Open [`dist/JobTracker.gs`](dist/JobTracker.gs) on GitHub and press the **copy**
+   button at the top right of the file.
+2. In your Apps Script editor, open your `JobTracker.gs` file (or create one and delete
+   the old separate files), select all, paste, **Save**.
+3. Reload the Sheet.
+
+That is the whole update, unless the release notes say otherwise. Two things
+occasionally need more, and both are things only you can do because they run as you:
+
+- **A new OAuth scope** — `appsscript.json` changed. Project Settings → tick *Show
+  `appsscript.json`*, paste the new one, then run any function once and approve the
+  dialog. Triggers stay broken until you do.
+- **New sheet columns or triggers** — run `setup()` once. It repairs header rows an
+  added column has outgrown, and rebuilds both triggers, which clears the
+  *Notify me immediately* failure alert, so set that again afterwards.
+
+Your `Config.gs` values live inside the bundle, so re-check them after pasting —
+`DRY_RUN` most of all. Script Properties are untouched by any of this: your API key and
+the poll cursor survive every paste.
+
+#### Or drive it from CI
+
+If you are comfortable with GitHub, fork the repo, enable Actions on the fork, and do
+[One-time setup](#one-time-setup) against your own Google account — your own
+`clasp login`, your own `SCRIPT_ID`, and `APPS_SCRIPT_TIMEZONE` for your timezone. Then
+updating is **Sync fork** followed by *Run workflow*.
 
 **Never reuse someone else's `CLASPRC_JSON`.** It is an OAuth refresh token for the
-Google account that created it — not a shared service credential. Each operator logs in
-as themselves.
-
-To take a later version: **Sync fork** on GitHub, then run the deploy. That is the whole
-update path, and the fork stays commit-for-commit identical to upstream, which is the
-point of putting the timezone in a variable rather than in a file.
-
-Two things remain yours to re-apply, because they live in the project rather than in
-the repo:
-
-- **`Config.gs` values you have tuned.** The deploy stops and shows you the diff
-  whenever that file changed, so this is visible rather than silent — but the repo's
-  values do win. Note that `DRY_RUN` ships `false`; if you want a rehearsal, see
-  [First run](#first-run) and set it `true` in the editor first.
-- **Anything in Script Properties**, including your API key and the poll cursor. `clasp`
-  never touches those.
+Google account that created it, not a shared service credential.
 
 
 ## Untrusted input

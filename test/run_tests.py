@@ -282,6 +282,23 @@ def check_probe_drift():
     return not fails
 
 
+def check_bundle_drift():
+    """dist/JobTracker.gs is what a hand-updated install pastes, so a stale one
+    ships code nobody wrote. Checked by running the bundler rather than
+    re-implementing the concatenation here - two copies of the rule for what
+    goes in the file is exactly the drift this is meant to catch.
+    """
+    import subprocess
+    r = subprocess.run(
+        [sys.executable, os.path.join(ROOT, 'tools', 'bundle.py'), '--check'],
+        capture_output=True, text=True)
+    if r.returncode == 0:
+        print("  PASS  bundle dist/JobTracker.gs matches src/")
+        return True
+    print("  FAIL  " + (r.stdout + r.stderr).strip())
+    return False
+
+
 def main():
     # geckodriver runs under snap confinement, which refuses this process's
     # SIGTERM. Selenium catches the resulting PermissionError, logs the whole
@@ -316,12 +333,13 @@ def main():
 
     failed = [r for r in results if not r['pass']]
     drift_ok = check_probe_drift()
+    bundle_ok = check_bundle_drift()
     for r in results:
         print(("  PASS  " if r['pass'] else "  FAIL  ") + r['name'])
         if not r['pass']:
             print("        " + r['err'])
     print(f"\n{len(results) - len(failed)}/{len(results)} passed")
-    sys.exit(1 if (failed or not drift_ok) else 0)
+    sys.exit(1 if (failed or not drift_ok or not bundle_ok) else 0)
 
 if __name__ == '__main__':
     main()

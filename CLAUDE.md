@@ -55,6 +55,12 @@ failure-notification setting live outside the files, so these still need the edi
 - Adding an OAuth scope means `src/appsscript.json` ships too, and the user
   re-authorizes.
 
+`dist/JobTracker.gs` is **generated** — all of `src/` concatenated in load order, for
+the installs that are updated by pasting one file because nobody can deploy for them
+(edit access to a bound script is read access to its API key). Rebuild it with
+`uv run python tools/bundle.py` in the same commit as any `src/` change; the suite
+fails on a stale bundle. Never edit it directly.
+
 The workflow's job summary reports each of these against what actually changed, and
 `clasp push` replaces the project's whole file set — a file deleted from `src/` is
 deleted in the project. What it compares against is the `deployed` tag, which the
