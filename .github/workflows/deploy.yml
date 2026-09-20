@@ -7,6 +7,10 @@
 # What the project needs, once:
 #   - Apps Script API enabled: https://script.google.com/home/usersettings
 #   - Secret SCRIPT_ID       - Apps Script editor -> Project Settings -> Script ID
+#   - Variable APPS_SCRIPT_TIMEZONE (optional) - a tz name such as
+#                              America/Los_Angeles, for an install in another
+#                              timezone than the one committed in
+#                              src/appsscript.json. A variable, not a secret.
 #   - Secret CLASPRC_JSON    - the whole of ~/.clasprc.json after a local
 #                              `clasp login`. It holds a refresh token for your
 #                              Google account; it is not a service account and
@@ -133,6 +137,32 @@ jobs:
           set -euo pipefail
           test -n "$SCRIPT_ID" || { echo "::error::secret SCRIPT_ID is empty or unset"; exit 1; }
           jq -n --arg id "$SCRIPT_ID" '{scriptId: $id, rootDir: "src"}' > .clasp.json
+
+      # Every install has its own timezone, and --force below overwrites the
+      # remote manifest. Without this, a deploy would quietly move someone's
+      # project to whatever timezone this repo is committed with, and the only
+      # way to keep theirs would be a permanent patch to appsscript.json that
+      # conflicts every time an OAuth scope is added upstream. A fork sets the
+      # APPS_SCRIPT_TIMEZONE variable instead of carrying a commit; unset, the
+      # repo's own value is used and nothing changes.
+      - name: Apply this install's timezone
+        env:
+          TZ_NAME: ${{ vars.APPS_SCRIPT_TIMEZONE }}
+        run: |
+          set -euo pipefail
+          if [ -z "$TZ_NAME" ]; then
+            echo "APPS_SCRIPT_TIMEZONE unset - keeping $(jq -r .timeZone src/appsscript.json) from the repo."
+            exit 0
+          fi
+          # A typo here would push a manifest Apps Script rejects, so check the
+          # name against the runner's tz database before it can reach Google.
+          if [ ! -f "/usr/share/zoneinfo/$TZ_NAME" ]; then
+            echo "::error::APPS_SCRIPT_TIMEZONE '$TZ_NAME' is not a tz database name (expected e.g. America/Los_Angeles)"
+            exit 1
+          fi
+          jq --arg tz "$TZ_NAME" '.timeZone = $tz' src/appsscript.json > "$RUNNER_TEMP/manifest.json"
+          mv "$RUNNER_TEMP/manifest.json" src/appsscript.json
+          echo "timeZone set to $TZ_NAME for this push."
 
       # --force answers the manifest prompt, which would otherwise hang here
       # waiting for a keypress nobody is there to give.
