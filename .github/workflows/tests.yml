@@ -1,0 +1,49 @@
+# The logic suite, on a GitHub-hosted runner.
+#
+# ubuntu-24.04 ships Firefox and geckodriver, which is everything
+# test/run_tests.py needs - it drives a real browser because Apps Script has no
+# local runtime and the sources have to be evaluated by an actual JS engine.
+#
+# tools/probe.py is deliberately NOT run here. It makes two real, billed API
+# calls. The drift check inside run_tests.py reads probe.py as text instead, so
+# a probe that has fallen out of step with src/ still fails this job without
+# anything being spent.
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_call:   # deploy.yml gates on this
+
+jobs:
+  logic:
+    name: Logic suite
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.1.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Record the browser under test
+        run: |
+          firefox --version
+          geckodriver --version | head -1
+
+      # Builds the environment from uv.lock, exactly as it does locally.
+      - name: Run the logic suite
+        run: uv run python test/run_tests.py
+
+      # The generated harness is the whole picture when a source file throws
+      # while loading, and it is gitignored, so it is only obtainable this way.
+      - name: Upload the harness on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: harness
+          path: test/.harness.html
+          if-no-files-found: ignore

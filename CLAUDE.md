@@ -34,15 +34,31 @@ schema with no `enum` constraints once.
 
 ## Deploying
 
-Deployment is **manual copy-paste** into the Apps Script editor, one editor file per
-`src/*.gs`. After changing files, say which ones need re-pasting.
+The **Deploy to Apps Script** workflow (`.github/workflows/deploy.yml`) `clasp push`es
+`src/` into the bound project. It is `workflow_dispatch` only — a deploy is a live
+change to a tracker polling a real mailbox, so it never rides on a merge. Manual
+copy-paste into the editor still works and is the fallback when CI is not an option;
+`/paste-list` reports which editor files a manual paste would need.
 
-- Re-pasting `src/Config.gs` reverts the user's settings to defaults — `DRY_RUN` back to
-  `true` most notably. Call this out whenever `Config.gs` changes.
+Either way, **pushing code is not the whole deploy.** Triggers, authorization and the
+failure-notification setting live outside the files, so these still need the editor:
+
+- `src/Config.gs` is the user's settings, not just code. Overwriting it replaces them
+  with the repo's values, silently. `DRY_RUN` is the one that bites — the wrong value
+  is a tracker that logs a clean run and writes nothing — so the repo tracks the live
+  setting (`false`) rather than a first-run default, and a rehearsal is an explicit
+  edit. The workflow **refuses to deploy** a changed `Config.gs` unless it is re-run
+  with `confirm_config` ticked; say the same thing whenever `Config.gs` changes under a
+  manual paste.
 - Changing `POLL_MINUTES` requires re-running `setup()`, which recreates both triggers
   and clears the trigger's failure-notification setting.
-- Adding an OAuth scope means `src/appsscript.json` must be re-pasted too, and the user
+- Adding an OAuth scope means `src/appsscript.json` ships too, and the user
   re-authorizes.
+
+The workflow's job summary reports each of these against what actually changed, and
+`clasp push` replaces the project's whole file set — a file deleted from `src/` is
+deleted in the project. What it compares against is the `deployed` tag, which the
+workflow moves after a successful push; do not delete or hand-move it.
 
 ## A message must never be silently dropped
 
@@ -95,6 +111,11 @@ the triage schema standalone, and `run_tests.py` fails if that copy drifts from
 
 Only pure logic is testable locally. Anything touching Gmail, Sheets, or the API is
 exercised in the Apps Script editor.
+
+The logic suite also runs on every pull request (`.github/workflows/tests.yml`) and
+gates the deploy. `probe.py` is never run in CI — it bills real calls; the drift check
+inside `run_tests.py` reads it as text instead, so a probe out of step with `src/`
+still fails the build without spending anything.
 
 ## Git
 

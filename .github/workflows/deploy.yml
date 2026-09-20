@@ -1,0 +1,233 @@
+# Push src/ into the bound Apps Script project, replacing the copy-paste.
+#
+# Manual only. A deploy is a live change to a tracker that is polling a real
+# mailbox, and the dangerous failure here is the quiet one - so it runs when
+# you press the button, never on a merge.
+#
+# What the project needs, once:
+#   - Apps Script API enabled: https://script.google.com/home/usersettings
+#   - Secret SCRIPT_ID       - Apps Script editor -> Project Settings -> Script ID
+#   - Variable APPS_SCRIPT_TIMEZONE (optional) - a tz name such as
+#                              America/Los_Angeles, for an install in another
+#                              timezone than the one committed in
+#                              src/appsscript.json. A variable, not a secret.
+#   - Secret CLASPRC_JSON    - the whole of ~/.clasprc.json after a local
+#                              `clasp login`. It holds a refresh token for your
+#                              Google account; it is not a service account and
+#                              it does not expire on its own. At the consent
+#                              screen only "Create and update Google Apps Script
+#                              projects" is needed - push uses nothing else, and
+#                              the Cloud Platform scope clasp also asks for
+#                              covers every GCP project on the account.
+#
+# The `deployed` tag marks what was last pushed. Everything below - the
+# Config.gs guard and the by-hand follow-ups - is a diff against it.
+name: Deploy to Apps Script
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_config:
+        description: "Push Config.gs too (REPLACES your live settings with the repo's values)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: apps-script-deploy
+  cancel-in-progress: false
+
+jobs:
+  test:
+    uses: ./.github/workflows/tests.yml
+
+  deploy:
+    name: clasp push
+    needs: test
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write   # to move the `deployed` tag
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      # What this deploy would change, and whether that includes the one file
+      # whose contents are the user's settings rather than the repo's.
+      - name: Work out what is changing
+        id: diff
+        run: |
+          set -euo pipefail
+          if git rev-parse -q --verify refs/tags/deployed >/dev/null; then
+            base=$(git rev-parse refs/tags/deployed)
+            changed=$(git diff --name-only "$base" HEAD -- src/)
+            echo "Last deploy: $(git log -1 --format='%h %s' "$base")"
+          else
+            base=""
+            changed=$(git ls-files src/)
+            echo "No \`deployed\` tag yet - treating every file as new."
+          fi
+          {
+            echo "base=$base"
+            echo "changed<<EOF"; echo "$changed"; echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "Files this deploy would replace:"
+          echo "${changed:-  (none)}" | sed 's/^/  /'
+
+      # Re-pasting Config.gs has always replaced the user's own settings, and
+      # clasp push does it on every run without saying so. DRY_RUN is the one
+      # that bites: the two values look alike in a diff, and the wrong one is a
+      # tracker that classifies mail and writes nothing while every log line
+      # still reads like success. So: stop, show the diff, and make pushing it a
+      # thing you asked for.
+      - name: Guard Config.gs
+        if: ${{ inputs.confirm_config != true }}
+        env:
+          BASE: ${{ steps.diff.outputs.base }}
+          CHANGED: ${{ steps.diff.outputs.changed }}
+        run: |
+          set -euo pipefail
+          echo "$CHANGED" | grep -qx 'src/Config.gs' || exit 0
+          {
+            echo "### Deploy stopped: Config.gs would be overwritten"
+            echo
+            echo "\`Config.gs\` holds your live settings, not just code. Pushing it"
+            echo "replaces them with the repo's values, \`DRY_RUN\` included - and"
+            echo "the wrong \`DRY_RUN\` is a run that logs cleanly and writes nothing."
+            echo
+            echo "Re-run this workflow with **Push Config.gs too** ticked, then"
+            echo "re-apply your settings in the editor. The diff that is waiting:"
+            echo
+            echo '```diff'
+            if [ -n "$BASE" ]; then
+              git diff "$BASE" HEAD -- src/Config.gs
+            else
+              echo "(no previous deploy recorded - the whole file is new to the project)"
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::error file=src/Config.gs::Config.gs changed since the last deploy. Re-run with confirm_config ticked, and re-apply your settings afterwards."
+          exit 1
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Install clasp
+        run: npm install -g @google/clasp@3.4.1
+
+      # The credentials file clasp writes at login, handed over whole. Written
+      # with printf rather than echo so a trailing newline cannot corrupt it.
+      - name: Authenticate clasp
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          set -euo pipefail
+          test -n "$CLASPRC_JSON" || { echo "::error::secret CLASPRC_JSON is empty or unset"; exit 1; }
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+          chmod 600 "$HOME/.clasprc.json"
+          jq -e . "$HOME/.clasprc.json" > /dev/null || { echo "::error::CLASPRC_JSON is not valid JSON"; exit 1; }
+
+      # Generated, not committed: the script id identifies your project and the
+      # rootDir is the only thing that differs from a default clasp layout.
+      - name: Point clasp at the project
+        env:
+          SCRIPT_ID: ${{ secrets.SCRIPT_ID }}
+        run: |
+          set -euo pipefail
+          test -n "$SCRIPT_ID" || { echo "::error::secret SCRIPT_ID is empty or unset"; exit 1; }
+          jq -n --arg id "$SCRIPT_ID" '{scriptId: $id, rootDir: "src"}' > .clasp.json
+
+      # Every install has its own timezone, and --force below overwrites the
+      # remote manifest. Without this, a deploy would quietly move someone's
+      # project to whatever timezone this repo is committed with, and the only
+      # way to keep theirs would be a permanent patch to appsscript.json that
+      # conflicts every time an OAuth scope is added upstream. A fork sets the
+      # APPS_SCRIPT_TIMEZONE variable instead of carrying a commit; unset, the
+      # repo's own value is used and nothing changes.
+      - name: Apply this install's timezone
+        env:
+          TZ_NAME: ${{ vars.APPS_SCRIPT_TIMEZONE }}
+        run: |
+          set -euo pipefail
+          if [ -z "$TZ_NAME" ]; then
+            echo "APPS_SCRIPT_TIMEZONE unset - keeping $(jq -r .timeZone src/appsscript.json) from the repo."
+            exit 0
+          fi
+          # A typo here would push a manifest Apps Script rejects, so check the
+          # name against the runner's tz database before it can reach Google.
+          if [ ! -f "/usr/share/zoneinfo/$TZ_NAME" ]; then
+            echo "::error::APPS_SCRIPT_TIMEZONE '$TZ_NAME' is not a tz database name (expected e.g. America/Los_Angeles)"
+            exit 1
+          fi
+          jq --arg tz "$TZ_NAME" '.timeZone = $tz' src/appsscript.json > "$RUNNER_TEMP/manifest.json"
+          mv "$RUNNER_TEMP/manifest.json" src/appsscript.json
+          echo "timeZone set to $TZ_NAME for this push."
+
+      # --force answers the manifest prompt, which would otherwise hang here
+      # waiting for a keypress nobody is there to give.
+      - name: Push src/ to Apps Script
+        run: clasp push --force
+
+      - name: Mark what is now deployed
+        run: |
+          set -euo pipefail
+          git tag -f deployed HEAD
+          git push -f origin refs/tags/deployed
+
+
+      # clasp replaces the code and nothing else. Triggers, authorization and
+      # the failure-notification setting all live outside the files, so the
+      # things that still need a human are listed here rather than left to be
+      # remembered. Same warnings the paste-list skill gives for a manual paste.
+      - name: Say what still has to be done by hand
+        env:
+          BASE: ${{ steps.diff.outputs.base }}
+          CHANGED: ${{ steps.diff.outputs.changed }}
+        run: |
+          set -euo pipefail
+          # No previous deploy: diff against the empty tree, so every file
+          # counts as added and the first run lists the whole picture.
+          base=${BASE:-$(git hash-object -t tree /dev/null)}
+          range() { git diff "$base" HEAD -- "$@"; }
+          notes=$(mktemp)
+
+          {
+            echo "### Deployed"
+            echo
+            echo "Pushed to Apps Script at \`$(git rev-parse --short HEAD)\`. Files replaced:"
+            echo
+            echo "${CHANGED:-(none - the project already matched)}" | sed 's/^/- `/; s/$/`/'
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if echo "$CHANGED" | grep -qx 'src/Config.gs'; then
+            dry=$(grep -m1 'DRY_RUN:' src/Config.gs | sed -E 's/.*DRY_RUN: *([a-z]+).*/\1/')
+            printf '%s\n' "- **Re-apply your settings.** \`Config.gs\` was overwritten with the repo's values. \`DRY_RUN\` is now \`$dry\`." >> "$notes"
+          fi
+
+          if range src/Config.gs | grep -q '^[-+].*POLL_MINUTES'; then
+            printf '%s\n' "- **Re-run \`setup()\`.** \`POLL_MINUTES\` changed, and a trigger's interval is fixed when it is created. Re-running rebuilds both triggers, which clears *Notify me immediately* on \`pollInbox\` - set that again afterwards (Triggers -> the row's menu -> Edit trigger)." >> "$notes"
+          fi
+
+          if range src/appsscript.json | grep -q '^+.*googleapis.com/auth/'; then
+            printf '%s\n' "- **Re-authorize.** \`appsscript.json\` gained an OAuth scope, so the next run will ask for permission again." >> "$notes"
+          fi
+
+          # A function with no trailing underscore appears in the editor's Run
+          # dropdown - the project's list of intended entry points, which is
+          # short on purpose.
+          new_fns=$(range 'src/*.gs' | grep -E '^\+function [A-Za-z_$][A-Za-z0-9_$]*\(' \
+                    | sed -E 's/^\+function ([A-Za-z0-9_$]+)\(.*/\1/' | grep -v '_$' || true)
+          if [ -n "$new_fns" ]; then
+            # paste -d takes a LIST of delimiters and cycles them, so ', '
+            # would alternate comma and space. One delimiter, spaced after.
+            list=$(echo "$new_fns" | sed 's/^/`/; s/$/`/' | paste -sd, - | sed 's/,/, /g')
+            printf '%s\n' "- **New entry points in the Run dropdown:** $list. Confirm that was intended." >> "$notes"
+          fi
+
+          if [ -s "$notes" ]; then
+            { echo "#### Still to do in the editor"; echo; cat "$notes"; } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Nothing further to do in the editor." >> "$GITHUB_STEP_SUMMARY"
+          fi

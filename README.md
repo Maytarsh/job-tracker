@@ -14,12 +14,13 @@ Daily trigger ────────▶ markStale()   Open + silent 30 days �
 
 | | |
 |---|---|
-| `src/` | **Everything that goes into Apps Script.** Paste each file into the editor. |
+| `src/` | **Everything that goes into Apps Script.** Pushed by CI, or pasted by hand. |
 | `tools/probe.py` | Validates both API payload shapes against the live API. Local only. |
 | `test/` | Logic suite, run in headless Firefox. Local only. |
+| `.github/workflows/` | Tests on every PR; a manual [clasp](https://github.com/google/clasp) deploy. Local only. |
 
-Only `src/` reaches Google. If you use [clasp](https://github.com/google/clasp), point
-`rootDir` at `src`.
+Only `src/` reaches Google — see [Deploying from CI](#deploying-from-ci) to push it
+instead of pasting it.
 
 ## Setup
 
@@ -30,6 +31,9 @@ Only `src/` reaches Google. If you use [clasp](https://github.com/google/clasp),
    Project Settings → tick *Show `appsscript.json`*, then paste that too (it declares
    the OAuth scopes). Delete the default `Code.gs` stub. Naming the project something
    recognizable is worth it — the authorization dialog uses that name.
+
+   This is the step [Deploying from CI](#deploying-from-ci) automates; the rest of the
+   setup is by hand either way.
 3. **Add your API key.** Project Settings (⚙️) → Script Properties → *Add script
    property*: `ANTHROPIC_API_KEY` = your key from console.anthropic.com → *Save*.
    It lives only there — never in the Sheet, so sharing the Sheet never leaks it.
@@ -67,7 +71,9 @@ touch a sheet it didn't create.
 
 ## First run
 
-`CONFIG.DRY_RUN` starts `true` — classify and log, write nothing.
+Start with a rehearsal: set `CONFIG.DRY_RUN = true` in `Config.gs` — classify and log,
+write nothing. It ships `false` because this repo mirrors a live install, so the
+rehearsal is an edit you make rather than a default you accept (see [Tuning](#tuning)).
 
 1. **Run `runBackfill`** (menu, or the editor dropdown). Reads the last 30 days.
    This is separate from the 30-minute trigger, which only ever looks at the last
@@ -88,7 +94,7 @@ touch a sheet it didn't create.
    - **`_Processed`** — everything that reached the model. The `Evidence` column shows
      the phrase it based its call on, which is how you tell a misread from a genuinely
      ambiguous email.
-4. Set `DRY_RUN = false` in `Config.gs` and run `runBackfill` again.
+4. Set `DRY_RUN` back to `false` and run `runBackfill` again.
 
 A dry run is a rehearsal, so its `_Processed` rows are marked `dry-run` and do **not**
 count as handled — otherwise flipping the flag would leave every message already
@@ -195,7 +201,7 @@ Everything lives in `src/Config.gs`:
 
 | Setting | Default | |
 |---|---|---|
-| `DRY_RUN` | `true` | flip after the first clean backfill |
+| `DRY_RUN` | `false` | set `true` for a rehearsal, back to `false` to write |
 | `POLL_MINUTES` | 30 | how often the trigger runs; re-run `setup()` after changing |
 | `BACKFILL_DAYS` | 30 | how far back history goes |
 | `STALE_DAYS` | 30 | when an Open row becomes Ghosted |
@@ -207,8 +213,10 @@ The prefilter is deliberately over-inclusive: a missed confirmation is a lost ro
 while a false positive costs a fraction of a cent at triage.
 
 `Config.gs` is the one file that holds *your* settings rather than just code, so
-re-pasting it reverts everything above to the defaults — `DRY_RUN` back to `true` most
-notably. Re-check it after any update.
+pushing or re-pasting it replaces every value above with the repo's. Keep the repo in
+step with what you actually run, and re-check the file after any update — the
+[deploy workflow](#deploying) stops and shows you the diff rather than letting it
+happen quietly.
 
 Note that `DRY_RUN` does not make a run free. Triage is called on every candidate email
 either way; the flag only skips the sheet write and the company enrichment that follows
@@ -258,6 +266,139 @@ shipped an API schema with no `enum` constraints once. Both request schemas are 
 built lazily inside functions, and there are regression tests for it. **Keep the test
 harness in alphabetical order** — sorting it by dependency would hide the whole class
 of bug.
+
+## Deploying from CI
+
+Two GitHub Actions workflows, both of which run on a GitHub-hosted `ubuntu-24.04`
+runner — it ships Firefox and geckodriver, which is all the logic suite needs.
+
+| Workflow | When | What it does |
+|---|---|---|
+| **Tests** (`tests.yml`) | every pull request, and pushes to `main` | Runs `test/run_tests.py`. Never runs `probe.py` — that bills real API calls. |
+| **Deploy to Apps Script** (`deploy.yml`) | you press *Run workflow* | Runs the tests, then `clasp push`es `src/` into the bound project. |
+
+The deploy is **manual on purpose**. It is a live change to a script that is polling
+your mailbox every 30 minutes, so it does not ride on a merge to `main`.
+
+### One-time setup
+
+The Sheet-bound project still has to be created by hand (Setup steps 1 and 3–6 above) —
+a script that isn't bound to a Sheet can't be fixed by pushing files at it. What CI
+replaces is step 2, the pasting.
+
+1. **Enable the Apps Script API** for your Google account at
+   [script.google.com/home/usersettings](https://script.google.com/home/usersettings).
+   Without it `clasp push` fails with a 403 that doesn't say this is why.
+2. **Log in locally once**, to produce the credentials CI will reuse. clasp 3 needs
+   Node 20+, which Ubuntu 24.04 and later package as `nodejs`:
+   ```bash
+   sudo apt install -y nodejs npm   # skip if `node --version` already says 20+
+   npx @google/clasp@3.4.1 login    # opens a browser, writes ~/.clasprc.json
+   ```
+   `npx` fetches clasp for that one command, so nothing is installed globally.
+   **On the consent screen, untick *Select all* and tick only
+   *Create and update Google Apps Script projects*.** That one scope is all
+   `clasp push` uses — `clasp pull` was verified against this project with nothing
+   else granted, and push reads and writes through the same `script.projects` scope.
+   clasp asks for eight because it is one tool for many commands:
+
+   | Also offered | Only needed for | Grant it? |
+   |---|---|---|
+   | See info about your Drive files | `clasp list` | no |
+   | See/edit/create/delete specific Drive files | `clasp create`, `clasp clone` | no |
+   | Manage your Google API service configuration | `clasp apis enable` | no |
+   | See, edit, configure and delete your Google Cloud data | `clasp apis`, GCP linking | **no** |
+   | Publish this application as a web app | `clasp deploy` | no |
+   | View log data for your projects | `clasp logs` | no |
+   | Create and update Apps Script **deployments** | `clasp deploy` | no |
+
+   The Cloud Platform one is the reason this is worth the two extra clicks: it is not
+   scoped to this script, or to Apps Script at all — it covers every Google Cloud
+   project on the account, and nothing here calls a GCP API. Note also that Apps Script
+   *projects* (needed) and Apps Script *deployments* (not needed) are different things:
+   `clasp push` replaces the code in the editor, which is all this wants, while a
+   deployment is the versioned-publish concept this project does not use — it runs
+   from triggers.
+3. **Add two repository secrets.** Either Settings → Secrets and variables → Actions,
+   or, with the `gh` CLI:
+   ```bash
+   gh secret set CLASPRC_JSON < ~/.clasprc.json
+   gh secret set SCRIPT_ID --body '<the script id>'
+   ```
+   - `CLASPRC_JSON` — the entire contents of `~/.clasprc.json`. It holds an OAuth
+     refresh token for your Google account, so it is as sensitive as the login itself.
+     [Revoking clasp](https://myaccount.google.com/permissions) is what turns CI's
+     access off.
+   - `SCRIPT_ID` — Apps Script editor → Project Settings → *Script ID*.
+4. **If your project is not in the timezone committed in `src/appsscript.json`**, add a
+   repository **variable** (same page, *Variables* tab — not a secret, since you will
+   want to read it back) named `APPS_SCRIPT_TIMEZONE`, set to a tz name such as
+   `America/Los_Angeles`. `clasp push` overwrites the manifest, so without this a
+   deploy would quietly move the project to this repo's timezone. Left unset, the
+   committed value is used and nothing changes.
+
+`.clasp.json` is generated by the workflow and gitignored; there is nothing to commit.
+
+### Deploying
+
+Actions → **Deploy to Apps Script** → *Run workflow*. (The button only appears once
+`deploy.yml` is on `main` — GitHub reads `workflow_dispatch` from the default branch.
+You can then still deploy any branch by picking it in the *Use workflow from* dropdown.)
+
+- **`Config.gs` is guarded.** It holds your settings, not just code, and `clasp push`
+  overwrites it like any other file — whatever you have tuned in the editor is
+  replaced by the repo's values, without being asked. `DRY_RUN` is the one that bites:
+  the two values look alike in a diff, and the wrong one is a tracker that logs a clean
+  run and writes nothing. So the deploy **fails** if `Config.gs` changed, printing the
+  diff, until you re-run it with **Push Config.gs too** ticked. Re-apply anything you
+  had set differently afterwards. The first ever deploy always needs this, since
+  nothing has been pushed before.
+- **The job summary lists what still needs the editor** — re-running `setup()` after a
+  `POLL_MINUTES` change, re-authorizing after a new OAuth scope, and any new entry
+  point that has appeared in the Run dropdown.
+- **A `deployed` tag** marks what was last pushed, and every comparison above is made
+  against it. The workflow moves it after a successful push; leave it alone.
+
+`clasp push` replaces the project's whole file set, so deleting a file from `src/`
+deletes it in the project — including the default `Code.gs` stub, if it's still there.
+
+### Running an independent install
+
+Every install is separate: its own Sheet, its own Apps Script project, its own
+`ANTHROPIC_API_KEY` in Script Properties, its own bill. Nothing is shared between them
+and there is no central account. To track your own mail from this repo:
+
+1. **Fork it.** You need somewhere to hold your own secrets, and they cannot go in
+   someone else's repository.
+2. **Enable Actions on the fork.** GitHub disables workflows on a new fork until the
+   owner confirms it in the Actions tab. Nothing runs until you do.
+3. **Do the [Setup](#setup) by hand** — the Sheet, the API key, `setup()`, the
+   triggers, the failure alert. A script that isn't bound to a Sheet cannot be fixed by
+   pushing files at it, so this part is not automatable.
+4. **Do [One-time setup](#one-time-setup) above** against your own Google account: your
+   own `clasp login`, your own `SCRIPT_ID`, and `APPS_SCRIPT_TIMEZONE` if you are not in
+   the timezone this repo happens to be committed with.
+5. **Deploy.** The first run always needs **Push Config.gs too** ticked, because there
+   is no `deployed` tag yet.
+
+**Never reuse someone else's `CLASPRC_JSON`.** It is an OAuth refresh token for the
+Google account that created it — not a shared service credential. Each operator logs in
+as themselves.
+
+To take a later version: **Sync fork** on GitHub, then run the deploy. That is the whole
+update path, and the fork stays commit-for-commit identical to upstream, which is the
+point of putting the timezone in a variable rather than in a file.
+
+Two things remain yours to re-apply, because they live in the project rather than in
+the repo:
+
+- **`Config.gs` values you have tuned.** The deploy stops and shows you the diff
+  whenever that file changed, so this is visible rather than silent — but the repo's
+  values do win. Note that `DRY_RUN` ships `false`; if you want a rehearsal, see
+  [First run](#first-run) and set it `true` in the editor first.
+- **Anything in Script Properties**, including your API key and the poll cursor. `clasp`
+  never touches those.
+
 
 ## Untrusted input
 

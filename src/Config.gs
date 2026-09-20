@@ -5,8 +5,11 @@
 
 var CONFIG = {
   // Write to the Applications tab? false = classify and log only.
-  // Leave true for the first backfill, then flip it.
-  DRY_RUN: true,
+  // Ships false because the repo mirrors a live install: a deploy that pushed
+  // true would stop the sheet being written while every log line still read
+  // like success. Set it true by hand for a rehearsal - the first backfill, or
+  // after changing anything that affects classification - then set it back.
+  DRY_RUN: false,
 
   TRIAGE_MODEL: 'claude-haiku-4-5',
   // Sonnet, not Opus: the task is search, read a page, pick a value from a
