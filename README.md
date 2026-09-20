@@ -285,11 +285,13 @@ replaces is step 2, the pasting.
 1. **Enable the Apps Script API** for your Google account at
    [script.google.com/home/usersettings](https://script.google.com/home/usersettings).
    Without it `clasp push` fails with a 403 that doesn't say this is why.
-2. **Log in locally once**, to produce the credentials CI will reuse. Needs Node 20+;
-   `npx` fetches clasp for the one command, so nothing is installed globally:
+2. **Log in locally once**, to produce the credentials CI will reuse. clasp 3 needs
+   Node 20+, which Ubuntu 24.04 and later package as `nodejs`:
    ```bash
+   sudo apt install -y nodejs npm   # skip if `node --version` already says 20+
    npx @google/clasp@3.4.1 login    # opens a browser, writes ~/.clasprc.json
    ```
+   `npx` fetches clasp for that one command, so nothing is installed globally.
    **On the consent screen, untick *Select all* and tick only
    *Create and update Google Apps Script projects*.** That one scope is all
    `clasp push` uses — `clasp pull` was verified against this project with nothing
