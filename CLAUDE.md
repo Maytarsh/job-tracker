@@ -43,10 +43,13 @@ copy-paste into the editor still works and is the fallback when CI is not an opt
 Either way, **pushing code is not the whole deploy.** Triggers, authorization and the
 failure-notification setting live outside the files, so these still need the editor:
 
-- `src/Config.gs` is the user's settings, not just code. Overwriting it reverts them to
-  the repo's values — `DRY_RUN` back to `true` most notably. The workflow **refuses to
-  deploy** a changed `Config.gs` unless it is re-run with `confirm_config` ticked; say
-  the same thing whenever `Config.gs` changes under a manual paste.
+- `src/Config.gs` is the user's settings, not just code. Overwriting it replaces them
+  with the repo's values, silently. `DRY_RUN` is the one that bites — the wrong value
+  is a tracker that logs a clean run and writes nothing — so the repo tracks the live
+  setting (`false`) rather than a first-run default, and a rehearsal is an explicit
+  edit. The workflow **refuses to deploy** a changed `Config.gs` unless it is re-run
+  with `confirm_config` ticked; say the same thing whenever `Config.gs` changes under a
+  manual paste.
 - Changing `POLL_MINUTES` requires re-running `setup()`, which recreates both triggers
   and clears the trigger's failure-notification setting.
 - Adding an OAuth scope means `src/appsscript.json` ships too, and the user

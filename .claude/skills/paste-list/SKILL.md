@@ -18,9 +18,10 @@ know exactly which editor files to replace.
    is only visible after Project Settings → *Show `appsscript.json`*.
 
 3. Add the warnings that apply:
-   - **`Config.gs` changed** — re-pasting it reverts the user's own settings to the
-     defaults in the file. `DRY_RUN` goes back to `true`. Tell them to re-apply their
-     values after pasting.
+   - **`Config.gs` changed** — re-pasting it replaces the user's own settings with
+     whatever is in the file, `DRY_RUN` included. Say which way `DRY_RUN` will end up
+     (read it from the file, do not assume) and tell them to re-apply anything they had
+     set differently.
    - **`POLL_MINUTES` changed** — `setup()` must be re-run to rebuild the triggers, and
      that clears the trigger's *Notify me immediately* failure-notification setting, so
      it has to be set again afterwards (⏰ Triggers → ⋮ on `pollInbox` → Edit trigger).

@@ -24,7 +24,7 @@ on:
   workflow_dispatch:
     inputs:
       confirm_config:
-        description: "Push Config.gs too (RESETS DRY_RUN and every other knob to the repo's values)"
+        description: "Push Config.gs too (REPLACES your live settings with the repo's values)"
         type: boolean
         default: false
 
@@ -70,11 +70,12 @@ jobs:
           echo "Files this deploy would replace:"
           echo "${changed:-  (none)}" | sed 's/^/  /'
 
-      # Re-pasting Config.gs has always reverted the user's own settings, and
-      # clasp push does it on every run without saying so. DRY_RUN going quietly
-      # back to true is a tracker that classifies mail and writes nothing while
-      # every log line still reads like success. So: stop, show the diff, and
-      # make pushing it a thing you asked for.
+      # Re-pasting Config.gs has always replaced the user's own settings, and
+      # clasp push does it on every run without saying so. DRY_RUN is the one
+      # that bites: the two values look alike in a diff, and the wrong one is a
+      # tracker that classifies mail and writes nothing while every log line
+      # still reads like success. So: stop, show the diff, and make pushing it a
+      # thing you asked for.
       - name: Guard Config.gs
         if: ${{ inputs.confirm_config != true }}
         env:
@@ -87,7 +88,8 @@ jobs:
             echo "### Deploy stopped: Config.gs would be overwritten"
             echo
             echo "\`Config.gs\` holds your live settings, not just code. Pushing it"
-            echo "replaces them with the repo's values - \`DRY_RUN\` most of all."
+            echo "replaces them with the repo's values, \`DRY_RUN\` included - and"
+            echo "the wrong \`DRY_RUN\` is a run that logs cleanly and writes nothing."
             echo
             echo "Re-run this workflow with **Push Config.gs too** ticked, then"
             echo "re-apply your settings in the editor. The diff that is waiting:"

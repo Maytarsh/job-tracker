@@ -71,7 +71,9 @@ touch a sheet it didn't create.
 
 ## First run
 
-`CONFIG.DRY_RUN` starts `true` — classify and log, write nothing.
+Start with a rehearsal: set `CONFIG.DRY_RUN = true` in `Config.gs` — classify and log,
+write nothing. It ships `false` because this repo mirrors a live install, so the
+rehearsal is an edit you make rather than a default you accept (see [Tuning](#tuning)).
 
 1. **Run `runBackfill`** (menu, or the editor dropdown). Reads the last 30 days.
    This is separate from the 30-minute trigger, which only ever looks at the last
@@ -92,7 +94,7 @@ touch a sheet it didn't create.
    - **`_Processed`** — everything that reached the model. The `Evidence` column shows
      the phrase it based its call on, which is how you tell a misread from a genuinely
      ambiguous email.
-4. Set `DRY_RUN = false` in `Config.gs` and run `runBackfill` again.
+4. Set `DRY_RUN` back to `false` and run `runBackfill` again.
 
 A dry run is a rehearsal, so its `_Processed` rows are marked `dry-run` and do **not**
 count as handled — otherwise flipping the flag would leave every message already
@@ -199,7 +201,7 @@ Everything lives in `src/Config.gs`:
 
 | Setting | Default | |
 |---|---|---|
-| `DRY_RUN` | `true` | flip after the first clean backfill |
+| `DRY_RUN` | `false` | set `true` for a rehearsal, back to `false` to write |
 | `POLL_MINUTES` | 30 | how often the trigger runs; re-run `setup()` after changing |
 | `BACKFILL_DAYS` | 30 | how far back history goes |
 | `STALE_DAYS` | 30 | when an Open row becomes Ghosted |
@@ -211,8 +213,10 @@ The prefilter is deliberately over-inclusive: a missed confirmation is a lost ro
 while a false positive costs a fraction of a cent at triage.
 
 `Config.gs` is the one file that holds *your* settings rather than just code, so
-re-pasting it reverts everything above to the defaults — `DRY_RUN` back to `true` most
-notably. Re-check it after any update.
+pushing or re-pasting it replaces every value above with the repo's. Keep the repo in
+step with what you actually run, and re-check the file after any update — the
+[deploy workflow](#deploying) stops and shows you the diff rather than letting it
+happen quietly.
 
 Note that `DRY_RUN` does not make a run free. Triage is called on every candidate email
 either way; the flag only skips the sheet write and the company enrichment that follows
@@ -336,11 +340,13 @@ Actions → **Deploy to Apps Script** → *Run workflow*. (The button only appea
 You can then still deploy any branch by picking it in the *Use workflow from* dropdown.)
 
 - **`Config.gs` is guarded.** It holds your settings, not just code, and `clasp push`
-  overwrites it like any other file — `DRY_RUN` would go quietly back to `true`, which
-  looks exactly like a working tracker that writes nothing. So the deploy **fails** if
-  `Config.gs` changed, printing the diff, until you re-run it with **Push Config.gs
-  too** ticked. Re-apply your values in the editor afterwards. The first ever deploy
-  always needs this, since nothing has been pushed before.
+  overwrites it like any other file — whatever you have tuned in the editor is
+  replaced by the repo's values, without being asked. `DRY_RUN` is the one that bites:
+  the two values look alike in a diff, and the wrong one is a tracker that logs a clean
+  run and writes nothing. So the deploy **fails** if `Config.gs` changed, printing the
+  diff, until you re-run it with **Push Config.gs too** ticked. Re-apply anything you
+  had set differently afterwards. The first ever deploy always needs this, since
+  nothing has been pushed before.
 - **The job summary lists what still needs the editor** — re-running `setup()` after a
   `POLL_MINUTES` change, re-authorizing after a new OAuth scope, and any new entry
   point that has appeared in the Run dropdown.
