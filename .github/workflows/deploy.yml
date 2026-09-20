@@ -10,7 +10,11 @@
 #   - Secret CLASPRC_JSON    - the whole of ~/.clasprc.json after a local
 #                              `clasp login`. It holds a refresh token for your
 #                              Google account; it is not a service account and
-#                              it does not expire on its own.
+#                              it does not expire on its own. At the consent
+#                              screen only "Create and update Google Apps Script
+#                              projects" is needed - push uses nothing else, and
+#                              the Cloud Platform scope clasp also asks for
+#                              covers every GCP project on the account.
 #
 # The `deployed` tag marks what was last pushed. Everything below - the
 # Config.gs guard and the by-hand follow-ups - is a diff against it.
