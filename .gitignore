@@ -4,3 +4,7 @@ __pycache__/
 *.pyc
 .venv/
 .idea/
+
+# clasp: the script id and the OAuth token live in CI secrets, not the repo.
+.clasp.json
+.clasprc.json
