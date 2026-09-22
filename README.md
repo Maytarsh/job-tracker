@@ -6,7 +6,9 @@ still alive. Runs unattended in Google Apps Script; no server, nothing to instal
 
 ```
 Time trigger (30 min) ─▶ pollInbox()
-   collect  →  prefilter  →  triage (Haiku)  →  enrich (Sonnet + web search/fetch)  →  upsert
+   collect → prefilter → triage (Haiku) → upsert → write
+                                       then, with whatever time is left:
+                                          enrich (Sonnet + web search/fetch) → write
 Daily trigger ────────▶ markStale()   Open + silent 30 days → Ghosted
 ```
 
@@ -202,6 +204,11 @@ Everything lives in `src/Config.gs`:
 | `MAX_MESSAGES_PER_RUN` | 50 | chunk size; backfill re-queues itself past this |
 | `MAX_ENRICH_PER_RUN` | 3 | ceiling on enrichment calls per execution |
 | `MAX_BACKFILL_CHUNKS` | 40 | hard stop on backfill self-requeueing |
+| `HARD_LIMIT_SECONDS` | 360 | Apps Script's kill. A fact, not a knob — raising it only stops the guards working |
+| `RUN_BUDGET_SECONDS` | 240 | the softer target the message loop aims at |
+| `TRIAGE_MAX_SECONDS` / `ENRICH_MAX_SECONDS` | 60 / 150 | worst case for one call, used to decide whether it may start |
+| `FLUSH_RESERVE_SECONDS` | 45 | time kept back for the final write |
+| `ENRICH_MAX_ATTEMPTS` | 1 | retries for research; a retry re-runs every search and fetch |
 
 The prefilter is deliberately over-inclusive: a missed confirmation is a lost row,
 while a false positive costs a fraction of a cent at triage.
@@ -219,11 +226,20 @@ patterns or the triage prompt — and want to see the new output before it reach
 
 ## Cost
 
-Enrichment takes about 90 seconds per company, so a run does at most
-`MAX_ENRICH_PER_RUN` of them and stops researching entirely once it is within
-`ENRICH_RESERVE_SECONDS` of its budget. Rows left with a blank Market are filled in by
-later polls. This is deliberate: an execution killed at Apps Script's 6-minute ceiling
-loses everything it had buffered, including the backfill's continuation trigger.
+Enrichment is the slow part — around 90 seconds per company, and up to
+`ENRICH_MAX_SECONDS` in the worst case — so a run does at most `MAX_ENRICH_PER_RUN` of
+them, and only ever after the classifications it already paid for are safely on the
+sheet. Rows left with a blank Market are filled in by later polls, or by **Job Tracker →
+Fill in missing company profiles** if you want them now.
+
+Both of those exist because of Apps Script's 6-minute ceiling: an execution killed at it
+loses everything it had buffered, including the backfill's continuation trigger. A run
+therefore never starts a call it cannot finish. The question is not whether time remains
+but whether *this call* can return with `FLUSH_RESERVE_SECONDS` still in hand, measured
+against `HARD_LIMIT_SECONDS` rather than against the softer `RUN_BUDGET_SECONDS` the
+message loop aims at. Asking the easier question is what once let a 90-second research
+call start with 120 seconds to go and take the whole run down with it, every half hour,
+on a mailbox with a backlog of blank Markets to work through.
 
 Triage is `claude-haiku-4-5` per candidate email; enrichment is `claude-sonnet-5` with
 web search and web fetch, once per company — roughly $0.17 a company, most of it the

@@ -83,7 +83,10 @@ t('stage derives from category then hint', function () {
 // ---------------------------------------------------------------- upsert
 function fakeBook() {
   return { rows: [], appended: [], dirty: {}, companies: {}, newCompanies: [],
-           processed: [], skipped: [], enrichCount: 99 };  // enrichCount caps API calls
+           processed: [], skipped: [], enrichCount: 99,  // enrichCount caps API calls
+           // openBook_ defaults this off so the triage loop cannot research;
+           // these tests are the research paths, which switch it on.
+           mayResearch: true };
 }
 function msgAt(dayOffset) {
   return { threadId: 'T1', date: new Date(2026, 7, 1 + (dayOffset || 0)) };
@@ -684,7 +687,7 @@ t('companyProfile_ hands the location to the research call', function () {
       employee_range: '', founded_year: ''
     };
   };
-  var book = { companies: {}, newCompanies: [], enrichCount: 0 };
+  var book = { companies: {}, newCompanies: [], enrichCount: 0, mayResearch: true };
   try {
     var profile = companyProfile_(book, 'Algorio', 'https://example.com/job', 'Tel Aviv');
     eq(seen.location, 'Tel Aviv');
@@ -736,13 +739,110 @@ t('research is refused when the run is nearly out of time', function () {
 });
 
 t('a run with time to spare still researches', function () {
-  var book = fakeBook();
-  book.deadline = Date.now() + (CONFIG.ENRICH_RESERVE_SECONDS + 60) * 1000;
-  ok(enrichBudgetLeft_(book), 'budget is available');
+  var book = startClock_(fakeBook());
+  ok(enrichBudgetLeft_(book), 'a fresh run has room for a company');
+  ok(triageBudgetLeft_(book), 'and certainly for an email');
 });
 
 t('a book with no deadline is unrestricted', function () {
   ok(enrichBudgetLeft_(fakeBook()), 'menu-driven calls are not time-boxed by accident');
+});
+
+// ------------------------------------------------------ the run budget
+// Two users' pollInbox triggers died at the 6-minute ceiling every half hour,
+// each kill discarding a whole run's worth of paid-for triage. The guard was
+// asking the wrong question: "is there time left?" rather than "can this call
+// finish and still leave room to write?".
+
+t('a call that cannot finish is refused even with budget left on the clock', function () {
+  var book = fakeBook();
+  var now = Date.now();
+  // The shape that killed those runs: inside the soft budget, but the call
+  // would not be back before the execution is destroyed.
+  book.deadline = now + (CONFIG.ENRICH_MAX_SECONDS + 30) * 1000;
+  book.hardDeadline = now + (CONFIG.ENRICH_MAX_SECONDS - 30) * 1000;
+  ok(!enrichBudgetLeft_(book), 'the kill is what the reserve is measured against');
+});
+
+t('the reserves leave room for the flush', function () {
+  // Whatever the knobs are tuned to, the worst case of one call of each kind
+  // has to land before the kill with the flush still ahead of it.
+  var headroom = CONFIG.HARD_LIMIT_SECONDS - CONFIG.FLUSH_RESERVE_SECONDS;
+  ok(CONFIG.ENRICH_MAX_SECONDS < headroom, 'a company fits');
+  ok(CONFIG.TRIAGE_MAX_SECONDS < headroom, 'an email fits');
+  ok(CONFIG.FLUSH_RESERVE_SECONDS > 0, 'the flush is never the thing that is cut');
+});
+
+t('the message loop stops before a triage it has no room for', function () {
+  var book = fakeBook();
+  var now = Date.now();
+  book.deadline = now + (CONFIG.TRIAGE_MAX_SECONDS + 60) * 1000;
+  book.hardDeadline = now + (CONFIG.TRIAGE_MAX_SECONDS - 10) * 1000;
+  ok(!triageBudgetLeft_(book), 'a retrying triage can run for minutes too');
+});
+
+t('the triage loop never researches, whatever the clock says', function () {
+  // The loop's work is only safe once it is flushed, so research belongs to the
+  // pass that runs after the flush. openBook_ hands out books with it off.
+  var book = startClock_(fakeBook());
+  book.enrichCount = 0;
+  book.mayResearch = false;
+  var called = false;
+  var original = enrichCompany_;
+  enrichCompany_ = function () { called = true; return null; };
+  try {
+    var profile = companyProfile_(book, 'Algorio', '', 'Tel Aviv');
+    ok(!called, 'no research during the loop');
+    eq(profile.market, '', 'the row is left blank for the research pass');
+    eq(book.newCompanies.length, 0, 'and nothing is cached from a call never made');
+  } finally { enrichCompany_ = original; }
+});
+
+t('a failed enrichment is not retried four times over', function () {
+  // Each retry re-runs the searches and the fetch, so four attempts cost four
+  // calls and four times the wall clock — the whole execution, for one company.
+  var attempts = 0;
+  var originalFetch = UrlFetchApp;
+  UrlFetchApp = {
+    fetch: function () {
+      attempts++;
+      return {
+        getResponseCode: function () { return 529; },
+        getContentText: function () { return '{"type":"overloaded_error"}'; }
+      };
+    }
+  };
+  try {
+    withProps({ ANTHROPIC_API_KEY: 'test-key' }, function () {
+      try {
+        callAnthropic_({ model: CONFIG.ENRICH_MODEL }, CONFIG.ENRICH_MAX_ATTEMPTS);
+      } catch (e) { /* expected: it gives up */ }
+    });
+    eq(attempts, CONFIG.ENRICH_MAX_ATTEMPTS, 'one tool loop, not four');
+    ok(CONFIG.ENRICH_MAX_ATTEMPTS < CONFIG.API_MAX_ATTEMPTS,
+       'triage is cheap to repeat; enrichment is not');
+  } finally { UrlFetchApp = originalFetch; }
+});
+
+t('triage keeps the retries it is cheap enough to deserve', function () {
+  var attempts = 0;
+  var originalFetch = UrlFetchApp;
+  UrlFetchApp = {
+    fetch: function () {
+      attempts++;
+      return {
+        getResponseCode: function () { return 500; },
+        getContentText: function () { return '{}'; }
+      };
+    }
+  };
+  try {
+    withProps({ ANTHROPIC_API_KEY: 'test-key' }, function () {
+      try { callAnthropic_({ model: CONFIG.TRIAGE_MODEL }); }
+      catch (e) { /* expected */ }
+    });
+    eq(attempts, CONFIG.API_MAX_ATTEMPTS, 'the default still applies to triage');
+  } finally { UrlFetchApp = originalFetch; }
 });
 
 // fillMissingProfiles_ spends money, so it is a no-op during a rehearsal. These
@@ -817,6 +917,39 @@ t('filling in stops at the per-run cap instead of blanking rows', function () {
     eq(book.rows[CONFIG.MAX_ENRICH_PER_RUN][A_MARKET], '',
        'rows past the cap are left blank, not overwritten');
   } finally { enrichCompany_ = original; }
+});
+
+t('what research did not reach is said out loud, and only then', function () {
+  // A blank Market looks the same whether the research failed, was capped, or
+  // was never attempted — so the run has to say which.
+  function fillAndLog(rowCount) {
+    var book = fakeBook();
+    book.enrichCount = 0;
+    book.rows = [];
+    for (var i = 0; i < rowCount; i++) {
+      book.rows.push(['Co' + i, 'Role', '', '', 'Open', 'Applied',
+                      '', '', '', '', '', '', '', '', '']);
+    }
+    var lines = [];
+    var originalLog = Logger.log;
+    var original = enrichCompany_;
+    Logger.log = function (line) { lines.push(String(line)); };
+    enrichCompany_ = function () {
+      return { market: 'Other', sub_market: '', description: 'A company that does things.',
+               website: '', hq_location: '', employee_range: '', founded_year: '' };
+    };
+    try { whileWriting(function () { fillMissingProfiles_(book); }); }
+    finally { Logger.log = originalLog; enrichCompany_ = original; }
+    return lines.join('\n');
+  }
+
+  var left = fillAndLog(CONFIG.MAX_ENRICH_PER_RUN + 2);
+  ok(left.indexOf('research stopped with 2 row(s)') !== -1,
+     'the leftovers are counted: ' + left);
+
+  var none = fillAndLog(CONFIG.MAX_ENRICH_PER_RUN);
+  ok(none.indexOf('research stopped') === -1,
+     'a pass that reached every row stays quiet: ' + none);
 });
 
 t('no profile field is exempt from the degeneracy check', function () {
