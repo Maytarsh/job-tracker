@@ -14,18 +14,30 @@ function collectMessages_(afterEpoch, beforeEpoch, processedIds, limit) {
   var start = 0;
   var PAGE = 100;
 
+  // Every GmailApp method below may count against the account's daily Gmail
+  // quota, which every script and add-on on the account shares. Counted so the
+  // log shows what one run costs; the cost scales with every message in every
+  // thread the window touches, not with the messages it keeps.
+  var calls = 0, threadCount = 0, walked = 0;
+
   while (out.length < limit) {
     var threads = GmailApp.search(query, start, PAGE);
+    calls++;
     if (!threads.length) break;
+    threadCount += threads.length;
 
     for (var t = 0; t < threads.length && out.length < limit; t++) {
       var messages = threads[t].getMessages();
+      calls++;
       for (var m = 0; m < messages.length && out.length < limit; m++) {
         var msg = messages[m];
         var id = msg.getId();
+        calls++;
+        walked++;
         if (processedIds[id]) continue;
 
         var epoch = Math.floor(msg.getDate().getTime() / 1000);
+        calls++;
         if (epoch < afterEpoch) continue;
         if (beforeEpoch && epoch >= beforeEpoch) continue;
 
@@ -37,10 +49,13 @@ function collectMessages_(afterEpoch, beforeEpoch, processedIds, limit) {
           subject: msg.getSubject() || '',
           body: cleanBody_(msg.getPlainBody())
         });
+        calls += 5;  // thread getId, getDate, getFrom, getSubject, getPlainBody
       }
     }
     start += PAGE;
   }
+  Logger.log('gmail: ' + calls + ' call(s) over ' + threadCount + ' thread(s), ' +
+             walked + ' message(s) walked, ' + out.length + ' kept');
   return out;
 }
 
