@@ -187,9 +187,15 @@ function runBackfill_() {
   return result;
 }
 
-/** The pipeline: collect -> prefilter -> triage -> upsert -> flush. */
+/**
+ * The pipeline: collect -> prefilter -> triage -> upsert -> flush, and only
+ * then research. The flush sits between the two halves on purpose — see
+ * enrichPass_.
+ */
 function processWindow_(afterEpoch, beforeEpoch, limit) {
-  var deadline = Date.now() + CONFIG.RUN_BUDGET_SECONDS * 1000;
+  // Anchored here, before the Gmail read, because the kill is measured from the
+  // start of the execution and collecting a wide window is not free.
+  var clock = startClock_({});
 
   // First real run after a rehearsal: clear the dry-run rows so their messages
   // are reconsidered instead of being skipped as already handled.
@@ -202,9 +208,11 @@ function processWindow_(afterEpoch, beforeEpoch, limit) {
   var messages = collectMessages_(afterEpoch, beforeEpoch, processedIds, limit);
 
   var book = openBook_();
-  book.deadline = deadline;
+  book.deadline = clock.deadline;
+  book.hardDeadline = clock.hardDeadline;
   var stats = {
     seen: messages.length, skipped: 0, triaged: 0, written: 0, errors: 0,
+    enriched: 0,
     // The oldest message this run actually handled — the backfill's cursor.
     oldestEpoch: 0,
     // The oldest one it failed on, which the poll must not step over.
@@ -224,7 +232,11 @@ function processWindow_(afterEpoch, beforeEpoch, limit) {
     // Stop short of the 6-minute kill rather than being cut off by it. An
     // execution that dies loses everything buffered here, and the messages it
     // already paid to triage are triaged again on the next run.
-    if (Date.now() > deadline) {
+    //
+    // Whether *this* call can finish, not whether the budget has run out: a
+    // triage that retries a 429 four times takes minutes, and finding that out
+    // by being killed costs the whole buffer.
+    if (!triageBudgetLeft_(book)) {
       stats.outOfTime = true;
       Logger.log('out of time after ' + m + ' of ' + messages.length + ' message(s)');
       break;
@@ -305,11 +317,41 @@ function processWindow_(afterEpoch, beforeEpoch, limit) {
     ]);
   }
 
-  // Whatever budget is left goes on profiles the run had to leave blank.
-  fillMissingProfiles_(book);
+  // Every classification this run paid for reaches the sheet before a single
+  // research call is made. Research is the slowest thing here and the likeliest
+  // to overrun; when it used to run first, an overrun took the triage down with
+  // it — billed, killed, unrecorded, and repeated in half an hour.
   flushBook_(book);
+  stats.enriched = enrichPass_(clock);
   stats.hitLimit = (messages.length >= limit);
   return stats;
+}
+
+/**
+ * Whatever budget is left goes on profiles the run had to leave blank.
+ *
+ * Its own pass over its own copy of the book, for two reasons. It runs after
+ * the flush, so an overrunning research call can no longer destroy work that is
+ * already done. And it has to re-read the sheet either way: flushBook_ sorts
+ * Applications, so every index in the book above now points at a different row.
+ */
+function enrichPass_(clock) {
+  if (CONFIG.DRY_RUN) return 0;
+  // Asked before re-reading the sheet: with no room for even one call there is
+  // nothing this pass could do with the answer.
+  if (!enrichBudgetLeft_(clock)) {
+    Logger.log('no time for research this run; blanks are left for the next one');
+    return 0;
+  }
+
+  var book = openBook_();
+  book.deadline = clock.deadline;
+  book.hardDeadline = clock.hardDeadline;
+  book.mayResearch = true;
+
+  var filled = fillMissingProfiles_(book);
+  if (filled) flushBook_(book);
+  return filled;
 }
 
 /** Only these categories reach the Applications tab. */

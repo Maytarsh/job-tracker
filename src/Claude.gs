@@ -66,8 +66,15 @@ function recordSpend_(model, usage) {
  * the only place a request can leave the script, so no future caller — a new
  * menu item, a retry loop, a self-healing pass — can spend past the ceiling by
  * forgetting to ask.
+ *
+ * maxAttempts is per call site because the two calls retry for different money.
+ * Triage is one cheap round trip. Enrichment is a whole tool loop, so repeating
+ * it re-runs every search and the fetch: the retry costs what the call cost,
+ * and four of them cost four times the wall clock as well — which is how a
+ * 90-second call came to fill a six-minute execution on its own.
  */
-function callAnthropic_(payload) {
+function callAnthropic_(payload, maxAttempts) {
+  var attempts = maxAttempts || CONFIG.API_MAX_ATTEMPTS;
   var spent = spendToday_();
   if (spent >= CONFIG.DAILY_BUDGET_USD) {
     throw new Error(
@@ -90,7 +97,7 @@ function callAnthropic_(payload) {
   };
 
   var lastBody = '';
-  for (var attempt = 1; attempt <= CONFIG.API_MAX_ATTEMPTS; attempt++) {
+  for (var attempt = 1; attempt <= attempts; attempt++) {
     var res = UrlFetchApp.fetch(CONFIG.API_URL, options);
     var code = res.getResponseCode();
     lastBody = res.getContentText();
@@ -102,7 +109,7 @@ function callAnthropic_(payload) {
     }
 
     var retryable = (code === 429 || code === 408 || code >= 500);
-    if (!retryable || attempt === CONFIG.API_MAX_ATTEMPTS) {
+    if (!retryable || attempt === attempts) {
       throw new Error('Anthropic API ' + code + ': ' + lastBody.substring(0, 500));
     }
     Utilities.sleep(Math.pow(2, attempt) * 1000 + Math.floor(Math.random() * 500));
@@ -313,7 +320,7 @@ function enrichCompany_(companyName, hintUrl, locationHint) {
       companyTool_()
     ],
     tool_choice: { type: 'auto' }
-  });
+  }, CONFIG.ENRICH_MAX_ATTEMPTS);
 
   // Success is otherwise silent: without this the Executions tab shows nothing
   // for a completed enrichment, and there is no way to see what a company cost

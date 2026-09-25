@@ -160,7 +160,8 @@ function menuReEnrichSelected_() {
   }
 
   var sel = sheet.getActiveRange();
-  var book = openBook_();
+  var book = startClock_(openBook_());
+  book.mayResearch = true;  // researching is the whole point of this one
   var companySheet = getSheet_(TABS.COMPANIES);
   var cacheRows = companySheet.getLastRow() > 1
     ? companySheet.getRange(2, 1, companySheet.getLastRow() - 1, 1).getValues()
@@ -186,14 +187,14 @@ function menuReEnrichSelected_() {
     var profile = companyProfile_(
       book, name, book.rows[idx][A_JOB_URL], book.rows[idx][A_LOCATION]);
 
-    // An empty profile means MAX_ENRICH_PER_RUN was reached, not that the
-    // research came back blank. The poll can absorb that — it only fills an
+    // An empty profile means the per-run cap or the clock stopped the research,
+    // not that it came back blank. The poll can absorb that — it only fills an
     // empty Market — but here it would overwrite a Market and Description that
     // are already on the row, so stop rather than erase them.
     if (!profile.market && !profile.description) {
       capped = true;
       Logger.log('re-research stopped after ' + done +
-                 ' row(s): MAX_ENRICH_PER_RUN reached');
+                 ' row(s): out of per-run enrichments or out of time');
       break;
     }
 
@@ -208,7 +209,7 @@ function menuReEnrichSelected_() {
   flushBook_(book);
   Logger.log('menuReEnrichSelected: ' + done + ' row(s) re-researched');
   toast_('Re-researched ' + done + ' company row(s).' +
-         (capped ? ' Hit the per-run cap — select the rest and run again.' : ''));
+         (capped ? ' Stopped at the per-run limit — select the rest and run again.' : ''));
 }
 
 /**
@@ -427,8 +428,8 @@ function menuEnrichMissing() {
 }
 
 function menuEnrichMissing_() {
-  var book = openBook_();
-  book.deadline = Date.now() + CONFIG.RUN_BUDGET_SECONDS * 1000;
+  var book = startClock_(openBook_());
+  book.mayResearch = true;
   var filled = fillMissingProfiles_(book);
   flushBook_(book);
 

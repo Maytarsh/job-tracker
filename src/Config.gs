@@ -38,8 +38,28 @@ var CONFIG = {
   // Apps Script kills an execution at 6 minutes and everything buffered in
   // memory dies with it — the _Processed rows, the new Applications rows, and
   // the backfill's continuation trigger. Stop early and flush instead.
+  //
+  // HARD_LIMIT_SECONDS is the platform's number, not a knob: every reserve
+  // below is measured against it, so raising it does not buy time, it only
+  // stops the guards from working. RUN_BUDGET_SECONDS is the softer target the
+  // message loop aims at, leaving the difference as headroom for whatever call
+  // is already in flight when it is reached.
+  HARD_LIMIT_SECONDS: 360,
   RUN_BUDGET_SECONDS: 240,
-  ENRICH_RESERVE_SECONDS: 120, // don't start research without this much left
+
+  // How long one call may take, worst case. These are not timeouts — Apps
+  // Script cannot interrupt a UrlFetch — they are what a run assumes before
+  // deciding whether it has room to start another one at all. Asking "is there
+  // time left?" is what let a 90-second research call start with 120 seconds to
+  // go and take the whole execution down with it; the question has to be "can
+  // this one finish, and still leave room to write?".
+  TRIAGE_MAX_SECONDS: 60,
+  ENRICH_MAX_SECONDS: 150,
+
+  // What flushBook_ needs at the end: the changed rows, the appends, the sort
+  // and the derived column, across four tabs. It is the one thing in a run that
+  // must not be cut off, because everything else only counts once it lands.
+  FLUSH_RESERVE_SECONDS: 45,
 
   // Give up on a run once the API has failed this many times in a row. An
   // expired key or an empty credit balance fails every call, and grinding on
@@ -49,6 +69,15 @@ var CONFIG = {
   API_URL: 'https://api.anthropic.com/v1/messages',
   API_VERSION: '2023-06-01',
   API_MAX_ATTEMPTS: 4,
+
+  // Enrichment retries once and no more. A triage retry is one cheap round
+  // trip; an enrichment retry re-runs the whole tool loop — every search, the
+  // fetch, the thinking — so it costs as much as the call it is repeating and
+  // multiplies the wall clock by the attempt count. Four attempts turned a
+  // 90-second call into six minutes, which is the entire execution. A company
+  // that fails is left blank and picked up by a later poll; that path already
+  // exists and is free.
+  ENRICH_MAX_ATTEMPTS: 1,
 
   // Hard ceiling on API spend per calendar day (UTC). Every response is priced
   // from its own usage and added to a running total in Script Properties; once

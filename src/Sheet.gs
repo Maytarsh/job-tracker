@@ -144,8 +144,30 @@ function openBook_() {
     newCompanies: [],
     processed: [],
     skipped: [],
-    enrichCount: 0
+    enrichCount: 0,
+    // Off unless a caller says otherwise, so research only ever happens in a
+    // pass that owns the clock. The triage loop leaves Market blank instead,
+    // which is a state the sheet already has a way to resolve — fillMissingProfiles_
+    // picks it up, in this same run, once the classifications are safely written.
+    mayResearch: false
   };
+}
+
+/**
+ * Stamp a run's two clocks on the book.
+ *
+ * `deadline` is the soft target the message loop aims at. `hardDeadline` is the
+ * one that actually matters: the Apps Script kill, less the time flushBook_
+ * needs. Everything a run has done is buffered in memory until that flush, so a
+ * call that cannot finish and still leave room to write does not lose itself —
+ * it loses the whole run.
+ */
+function startClock_(book) {
+  var now = Date.now();
+  book.deadline = now + CONFIG.RUN_BUDGET_SECONDS * 1000;
+  book.hardDeadline =
+    now + (CONFIG.HARD_LIMIT_SECONDS - CONFIG.FLUSH_RESERVE_SECONDS) * 1000;
+  return book;
 }
 
 /**
@@ -292,6 +314,9 @@ function companyProfile_(book, companyName, hintUrl, locationHint) {
   var key = normalizeCompany_(companyName);
   if (!key) return { market: '', description: '' };
   if (book.companies[key]) return book.companies[key];
+  if (!book.mayResearch) {
+    return { market: '', description: '' };  // not this pass's job — see openBook_
+  }
   if (book.enrichCount >= CONFIG.MAX_ENRICH_PER_RUN) {
     return { market: '', description: '' };  // picked up on a later run
   }
@@ -326,13 +351,33 @@ function companyProfile_(book, companyName, hintUrl, locationHint) {
 }
 
 /**
- * Is there time to start another? Research takes roughly a minute and a half —
- * search, fetch, and a model that thinks — so starting one near the end of the
- * budget is how a run gets killed with its whole buffer still in memory.
+ * Is there room to start another call of this kind?
+ *
+ * Not "is there time left" — that is the question that produced the six-minute
+ * executions. A run asked whether 120 seconds remained of its own 240-second
+ * budget, said yes at t=119, and started a call whose worst case was longer
+ * than the 120 seconds of headroom that budget left before the kill. The whole
+ * buffer went with it: the classifications, the rows, the log entries.
+ *
+ * So the question is whether this call can *finish* and still leave
+ * FLUSH_RESERVE_SECONDS to write what the run has already done. Measured
+ * against the kill, not against the soft budget, because the kill is what
+ * destroys the buffer.
  */
+function callBudgetLeft_(book, maxSeconds) {
+  if (!book.deadline) return true;  // menu paths that were never given a clock
+  var finishesAt = Date.now() + maxSeconds * 1000;
+  return finishesAt < book.deadline && finishesAt < book.hardDeadline;
+}
+
+/** Room for one more company research call. */
 function enrichBudgetLeft_(book) {
-  if (!book.deadline) return true;
-  return Date.now() < book.deadline - CONFIG.ENRICH_RESERVE_SECONDS * 1000;
+  return callBudgetLeft_(book, CONFIG.ENRICH_MAX_SECONDS);
+}
+
+/** Room for one more triage call. */
+function triageBudgetLeft_(book) {
+  return callBudgetLeft_(book, CONFIG.TRIAGE_MAX_SECONDS);
 }
 
 /**
@@ -357,7 +402,10 @@ function fillMissingProfiles_(book) {
   });
 
   var filled = 0;
-  for (var t = 0; t < targets.length; t++) {
+  // Declared out here so the count of what was left behind survives the loop,
+  // whichever of the two breaks ended it.
+  var t = 0;
+  for (; t < targets.length; t++) {
     if (!enrichBudgetLeft_(book)) break;
     var row = targets[t].row;
     var profile = companyProfile_(book, row[A_COMPANY], row[A_JOB_URL], row[A_LOCATION]);
@@ -369,6 +417,14 @@ function fillMissingProfiles_(book) {
   }
 
   if (filled) Logger.log('filled ' + filled + ' missing company profile(s)');
+  // Out loud, because a blank Market is the one gap in this sheet that looks
+  // identical whether the research failed, was capped, or was never attempted.
+  // The coverage report counts what is left; this says why the run stopped.
+  if (t < targets.length) {
+    Logger.log('research stopped with ' + (targets.length - t) + ' row(s) still ' +
+               'blank — out of time or out of per-run enrichments. The next run ' +
+               'picks them up; Fill in missing company profiles does it now.');
+  }
   return filled;
 }
 
