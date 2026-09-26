@@ -73,10 +73,11 @@ of your edits and re-apply them after any update.
    - **Save first** (`Ctrl+S`). Until you do, the toolbar says *No functions* and Run
      is greyed out — the editor only re-scans on save. This looks exactly like a
      missing function and is the most common stumble.
-   - Choose **`setup`** in the dropdown, then **▷ Run**. Only these seven appear:
+   - Choose **`setup`** in the dropdown, then **▷ Run**. Only these ten appear:
      `setup`, `onOpen`, `pollInbox`, `runBackfill`, `markStale`, `menuReEnrichSelected`,
-     `menuReplaySelected`. Everything else ends in `_`, Apps Script's private-function
-     convention, and is hidden on purpose.
+     `menuReplaySelected`, `menuRescanSkipped`, `menuEnrichMissing`, `menuCoverage`.
+     Everything else ends in `_`, Apps Script's private-function convention, and is
+     hidden on purpose.
    - Authorize: *Review permissions* → your account → **"Google hasn't verified this
      app"** → **Advanced** → **Go to … (unsafe)** → **Allow**. Expected for any
      unpublished personal script.
@@ -271,9 +272,7 @@ loses everything it had buffered, including the backfill's continuation trigger.
 therefore never starts a call it cannot finish. The question is not whether time remains
 but whether *this call* can return with `FLUSH_RESERVE_SECONDS` still in hand, measured
 against `HARD_LIMIT_SECONDS` rather than against the softer `RUN_BUDGET_SECONDS` the
-message loop aims at. Asking the easier question is what once let a 90-second research
-call start with 120 seconds to go and take the whole run down with it, every half hour,
-on a mailbox with a backlog of blank Markets to work through.
+message loop aims at.
 
 Triage is `claude-haiku-4-5` per candidate email; enrichment is `claude-sonnet-5` with
 web search and web fetch, once per company — roughly $0.17 a company, most of it the
@@ -303,9 +302,9 @@ can run standalone; the test suite fails if that copy drifts from `src/Claude.gs
 `run_tests.py` loads `src/*.gs` **alphabetically**, which is the order Apps Script
 itself evaluates project files in — not dependency order. That matters: `Claude.gs`
 loads before `Config.gs`, so anything built at load time from Config's variables gets
-`undefined`, and `JSON.stringify` drops undefined keys without error. That silently
-shipped an API schema with no `enum` constraints once. Both request schemas are now
-built lazily inside functions, and there are regression tests for it. **Keep the test
+`undefined`, and `JSON.stringify` drops undefined keys without error, so a request
+schema built that way loses its `enum` constraints silently. Both request schemas are
+built lazily inside functions, and regression tests cover it. **Keep the test
 harness in alphabetical order** — sorting it by dependency would hide the whole class
 of bug.
 

@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# CLAUDE.md: "Branch and open a PR with `gh`; do not commit to `main`." That rule
-# was prose, and prose got ignored — a session edited three files sitting on main
-# and only the user noticed. This makes the rule refuse the edit instead.
+# Enforces CLAUDE.md's "Branch and open a PR with `gh`; do not commit to `main`."
 #
 # Blocks Write/Edit on files inside this repo while HEAD is the default branch.
 # `git checkout -b <name>` carries uncommitted work across, so being stopped here

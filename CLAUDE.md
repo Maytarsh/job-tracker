@@ -11,8 +11,8 @@ easy to get wrong while editing.
 Apps Script evaluates project files in **alphabetical order**, not dependency order, so
 `Claude.gs` runs before `Config.gs`. Anything built in a top-level `var` from Config's
 globals (`CONFIG`, `CATEGORIES`, `MARKETS`, `TABS`, `*_HEADERS`) is `undefined` at load
-time, and `JSON.stringify` drops undefined keys silently — this already shipped an API
-schema with no `enum` constraints once.
+time, and `JSON.stringify` drops undefined keys silently, so a request schema built
+that way loses its `enum` constraints with no error.
 
 - Build request schemas and anything else derived from Config **lazily, inside a
   function** (see `triageSchema_()` and `companyTool_()` in `src/Claude.gs`).
@@ -72,8 +72,8 @@ cannot spend past it by forgetting to ask. Every response is priced from its own
 
 The cost of a call is dominated by what the server tools drag into the conversation,
 not by the prompt. A `web_fetch` without `max_content_tokens` puts a whole page in
-context, where it is re-sent as input on every following turn of the tool loop — that
-alone took one company's research from cents to dollars. Cap anything that can pull
+context, where it is re-sent as input on every following turn of the tool loop, which
+can take one company's research from cents to dollars. Cap anything that can pull
 unbounded content in, and check the `enriched …` log line, which prints tokens,
 searches, fetches and the running daily total.
 
@@ -100,9 +100,8 @@ exercised in the Apps Script editor.
 
 Branch and open a PR with `gh`; do not commit to `main`. Cut the branch **before the
 first edit**, not at commit time — `.claude/hooks/require-branch.sh` refuses Write and
-Edit on this repo's files while HEAD is the default branch, because the rule as prose
-was read as being about commits alone. `git checkout -b <name>` carries uncommitted
-work across, so being stopped costs nothing.
+Edit on this repo's files while HEAD is the default branch. `git checkout -b <name>`
+carries uncommitted work across, so being stopped costs nothing.
 
 Commit subjects are imperative sentence-case describing the behaviour change, no type
 prefix — e.g. "Stop the backfill re-queueing itself forever".
