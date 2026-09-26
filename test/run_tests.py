@@ -16,7 +16,7 @@ STUBS = """
 var Logger = { log: function () {} };
 var Utilities = { sleep: function () {} };
 
-// A real key/value store rather than a constant, because the poll cursor now
+// A real key/value store rather than a constant, because the poll cursor
 // lives in user properties and the tests have to show the two kinds staying
 // apart - a stub that answered everything the same would hide exactly the
 // mix-up that loses a second mailbox's mail.
@@ -184,8 +184,8 @@ def check_probe_drift():
 
     # 1b. Enum values and the two strict-mode guarantees. Field names can match
     #     while an enum is empty or an additionalProperties is missing - and an
-    #     enum silently dropped by JSON.stringify is the failure CLAUDE.md
-    #     records this project shipping once.
+    #     enum silently dropped by JSON.stringify is the load-order failure
+    #     CLAUDE.md describes.
     def gs_array(name):
         return re.findall(r"'([^']*)'", _between(cfg, 'var %s = [' % name, '];'))
 

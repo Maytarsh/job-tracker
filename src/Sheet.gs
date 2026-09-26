@@ -54,12 +54,11 @@ function cleanField_(value) {
  * A schema guarantees the shape of the enrichment result, never the sanity of
  * its free text. Drop anything that came back malformed rather than writing it.
  *
- * Every string field, not a chosen few: hq_location, employee_range and
- * founded_year were once passed through raw on the assumption that a short,
- * factual-sounding field could not come back as scaffolding. One did —
- * "</p…" landed in Founded, truncated to ten characters by safeCell_ and
- * looking for all the world like a parsing quirk. A schema constrains shape,
- * never content, so nothing the model writes is exempt from this.
+ * Every string field, not a chosen few. A short, factual-sounding field such as
+ * founded_year can come back as scaffolding too — "</p…" in Founded, truncated
+ * to ten characters by safeCell_, looks for all the world like a parsing quirk.
+ * A schema constrains shape, never content, so nothing the model writes is
+ * exempt from this.
  */
 function sanitizeProfile_(profile) {
   if (!profile) return null;
@@ -353,11 +352,11 @@ function companyProfile_(book, companyName, hintUrl, locationHint) {
 /**
  * Is there room to start another call of this kind?
  *
- * Not "is there time left" — that is the question that produced the six-minute
- * executions. A run asked whether 120 seconds remained of its own 240-second
- * budget, said yes at t=119, and started a call whose worst case was longer
- * than the 120 seconds of headroom that budget left before the kill. The whole
- * buffer went with it: the classifications, the rows, the log entries.
+ * Not "is there time left". A run that asks whether 120 seconds remain of its
+ * own 240-second budget says yes at t=119, and can start a call whose worst
+ * case is longer than the 120 seconds of headroom that budget leaves before the
+ * kill. The whole buffer goes with it: the classifications, the rows, the log
+ * entries.
  *
  * So the question is whether this call can *finish* and still leave
  * FLUSH_RESERVE_SECONDS to write what the run has already done. Measured
@@ -383,10 +382,10 @@ function triageBudgetLeft_(book) {
 /**
  * Spend whatever budget is left on rows whose Market never got filled in.
  *
- * A run under time pressure writes the row and leaves the profile blank. Before
- * this existed, that blank was only ever filled if another email from the same
- * company happened to arrive later — so a one-off application stayed blank
- * forever. Now every poll picks up where the last one ran out, and the sheet
+ * A run under time pressure writes the row and leaves the profile blank.
+ * Without this pass, that blank would only be filled if another email from the
+ * same company happened to arrive later, so a one-off application would stay
+ * blank forever. Every poll picks up where the last one ran out, and the sheet
  * completes itself over a few cycles without anyone doing anything.
  */
 function fillMissingProfiles_(book) {
@@ -439,8 +438,8 @@ function fillMissingProfiles_(book) {
  * separate applications into one.
  *
  * "The company's open row" means the most recently updated one, compared by
- * date rather than taken as the last one seen: the sheet is sorted newest-first
- * now, so position on it says the opposite of what it used to.
+ * date rather than taken from its position, so the answer does not depend on
+ * how the sheet happens to be sorted.
  *
  * Returns {list, i, exact} where list is 'rows' (already on the sheet) or
  * 'appended' (created earlier in this same run); those flush differently, so a
@@ -602,9 +601,9 @@ function loadProcessedIds_() {
  * Actions that mean the message was not actually dealt with.
  *
  * A rehearsal pretended to handle it. A row whose upsert threw was classified —
- * and billed — but never reached the sheet, and used to count as done anyway,
- * so the only trace of the loss was one line in an execution log nobody reads.
- * Both get another attempt; the failed row stays in the log as a record.
+ * and billed — but never reached the sheet; counted as done, the only trace of
+ * the loss would be one line in an execution log nobody reads. Both get another
+ * attempt; the failed row stays in the log as a record.
  *
  * "failed:" is deliberately not in here. That marks a message whose response
  * could not be parsed, which will happen again on every retry — reconsidering

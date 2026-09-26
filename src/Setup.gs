@@ -275,7 +275,7 @@ function menuCoverage() {
     });
   }
 
-  // The question this report exists to answer, asked per mailbox now. A second
+  // The question this report exists to answer, asked per mailbox. A second
   // account nobody ever backfilled contributes no rows and no log lines, which
   // is indistinguishable from an account that simply gets no job mail — and
   // the total above would be quietly carried by the other one.

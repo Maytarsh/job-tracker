@@ -191,9 +191,9 @@ function triageMessage_(msg) {
   var res = callAnthropic_({
     model: CONFIG.TRIAGE_MODEL,
     // Enough room for the whole JSON object. A LinkedIn job link carries a few
-    // hundred characters of tracking parameters, and at 1024 the response was
-    // cut off mid-string — arriving as an unterminated-JSON SyntaxError rather
-    // than as the truncation it actually was.
+    // hundred characters of tracking parameters, and at 1024 the response can
+    // be cut off mid-string — arriving as an unterminated-JSON SyntaxError
+    // rather than as the truncation it actually is.
     max_tokens: 2048,
     system: [{
       type: 'text',
@@ -306,7 +306,7 @@ function enrichCompany_(companyName, hintUrl, locationHint) {
     messages: [{ role: 'user', content: prompt }],
     tools: [
       { type: 'web_search_20260209', name: 'web_search', max_uses: CONFIG.ENRICH_MAX_SEARCHES },
-      // Search snippets alone are what produced the aggregator answer for Algorio.
+      // Search snippets alone can profile a directory listing instead of the company.
       // web_fetch lets the model read the company's own site before profiling it. It
       // can only fetch URLs already in the conversation — i.e. ones search returned.
       {
