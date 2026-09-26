@@ -29,11 +29,11 @@ var CURSOR_KEYS = [PROP_LAST_RUN, PROP_BACKFILL_CHUNKS, PROP_BACKFILL_BEFORE];
 function cursorStore_() {
   var user = PropertiesService.getUserProperties();
   if (!user.getProperty(PROP_CURSOR_ADOPTED)) {
-    // Adopt the old single-account cursor, once. Starting empty instead would
-    // leave the first poll after this change with no cursor at all, so it
-    // would default to a POLL_MINUTES window and step straight over everything
-    // that arrived since the last real run — the very loss this split exists
-    // to prevent, caused by the fix for it. A second mailbox adopting the same
+    // Adopt the single-account cursor from Script Properties, once. An install
+    // that predates per-account cursors keeps its place there; starting empty
+    // instead would leave its first poll with no cursor at all, so it would
+    // default to a POLL_MINUTES window and step straight over everything that
+    // arrived since the last real run. A second mailbox adopting the same
     // value is harmless: it only reaches further back than it needs to, and
     // collectMessages_ drops whatever is already in either log.
     var script = PropertiesService.getScriptProperties();
@@ -66,10 +66,10 @@ function pollInbox_() {
   // so a capped run leaves the *oldest* messages unhandled — moving the cursor
   // to now would drop them permanently.
   //
-  // A failure is the same hazard and used to be missed entirely: a message
-  // whose triage threw gets no _Processed row so that it will be retried, but
-  // if the cursor moved to now the next window started after it and no run
-  // ever looked at it again. It was in neither log, so nothing reported it.
+  // A failure is the same hazard: a message whose triage threw gets no
+  // _Processed row so that it will be retried, but if the cursor moved to now
+  // the next window would start after it and no run would look at it again.
+  // It would be in neither log, so nothing would report it.
   // Rewind to just before the oldest failure instead, so successes still make
   // progress and the failures stay inside the window.
   if (result.oldestErrorEpoch) {
@@ -319,8 +319,8 @@ function processWindow_(afterEpoch, beforeEpoch, limit) {
 
   // Every classification this run paid for reaches the sheet before a single
   // research call is made. Research is the slowest thing here and the likeliest
-  // to overrun; when it used to run first, an overrun took the triage down with
-  // it — billed, killed, unrecorded, and repeated in half an hour.
+  // to overrun; run first, an overrun would take the triage down with it —
+  // billed, killed, unrecorded, and repeated in half an hour.
   flushBook_(book);
   stats.enriched = enrichPass_(clock);
   stats.hitLimit = (messages.length >= limit);
@@ -331,7 +331,7 @@ function processWindow_(afterEpoch, beforeEpoch, limit) {
  * Whatever budget is left goes on profiles the run had to leave blank.
  *
  * Its own pass over its own copy of the book, for two reasons. It runs after
- * the flush, so an overrunning research call can no longer destroy work that is
+ * the flush, so an overrunning research call cannot destroy work that is
  * already done. And it has to re-read the sheet either way: flushBook_ sorts
  * Applications, so every index in the book above now points at a different row.
  */

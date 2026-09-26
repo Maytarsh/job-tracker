@@ -278,8 +278,7 @@ t('a role-less email updates the most recently updated open row, wherever it sit
     rej.category = 'rejection';
     rej.role = '';  // rejections often name no role, which is what allows the fallback
 
-    // Newest-first is how the sheet is kept now; oldest-first is how it used to
-    // be. The fallback compares dates, so neither order changes which row wins.
+    // The fallback compares dates, so neither order changes which row wins.
     [['recent', 'old'], ['old', 'recent']].forEach(function (order) {
       var b = fakeBook();
       order.forEach(function (which) {
@@ -749,15 +748,14 @@ t('a book with no deadline is unrestricted', function () {
 });
 
 // ------------------------------------------------------ the run budget
-// Two users' pollInbox triggers died at the 6-minute ceiling every half hour,
-// each kill discarding a whole run's worth of paid-for triage. The guard was
-// asking the wrong question: "is there time left?" rather than "can this call
-// finish and still leave room to write?".
+// A run killed at the 6-minute ceiling discards all its paid-for triage. The
+// guard has to ask "can this call finish and still leave room to write?", not
+// "is there time left?".
 
 t('a call that cannot finish is refused even with budget left on the clock', function () {
   var book = fakeBook();
   var now = Date.now();
-  // The shape that killed those runs: inside the soft budget, but the call
+  // The dangerous shape: inside the soft budget, but the call
   // would not be back before the execution is destroyed.
   book.deadline = now + (CONFIG.ENRICH_MAX_SECONDS + 30) * 1000;
   book.hardDeadline = now + (CONFIG.ENRICH_MAX_SECONDS - 30) * 1000;
@@ -1007,9 +1005,9 @@ t('a message that could not be classified is not reconsidered forever', function
 });
 
 // ------------------------------------------------------------ spend ceiling
-// An uncapped web_fetch put a whole page into the conversation, where it was
-// re-sent as input on every following turn. One company reached dollars. The
-// ceiling is the backstop for whatever the next such mistake turns out to be.
+// An uncapped web_fetch puts a whole page into the conversation, where it is
+// re-sent as input on every following turn, taking one company into dollars.
+// The ceiling is the backstop for any such mistake.
 function withProps(store, fn) {
   var original = PropertiesService;
   PropertiesService = {
@@ -1145,7 +1143,7 @@ t('an unidentified mailbox still produces a usable link', function () {
 
 t('a mailbox adopts the old shared cursor exactly once', function () {
   withStores({ LAST_RUN_EPOCH: '1000' }, {}, function (script, user) {
-    // Starting empty would leave the first poll after this change defaulting to
+    // Starting empty would leave an older install's first poll defaulting to
     // a POLL_MINUTES window, stepping over everything since the last real run.
     eq(cursorStore_().getProperty(PROP_LAST_RUN), '1000', 'adopted');
     cursorStore_().setProperty(PROP_LAST_RUN, '5000');
@@ -1210,9 +1208,9 @@ t('coverage is reported per mailbox, not merged into one date', function () {
 });
 
 t('setup repairs a header row a new column has outgrown', function () {
-  // Adding Account to *_HEADERS is only half the job: an existing sheet keeps
-  // the header row it was created with, and setup() used to write headers only
-  // into a brand-new tab, so the column would stay an unlabelled blank forever.
+  // Adding a column to *_HEADERS is only half the job: an existing sheet keeps
+  // the header row it was created with, so if setup() wrote headers only into a
+  // brand-new tab, the column would stay an unlabelled blank forever.
   var stale = APP_HEADERS.slice(0, APP_HEADERS.length - 1).concat(['']);
   var written = null;
   function fakeTab(header) {

@@ -9,10 +9,9 @@ var CONFIG = {
   DRY_RUN: true,
 
   TRIAGE_MODEL: 'claude-haiku-4-5',
-  // Sonnet, not Opus: the task is search, read a page, pick a value from a
-  // thirteen-item enum and write two sentences. The one case that defeated
-  // this — "Algorio" — was a missing location hint, not missing capability,
-  // and the hint is supplied now. Measured at ~$0.39 a company on Opus 5.
+  // Sonnet, not Opus: the task is search, read a page, pick a value from the
+  // MARKETS enum and write two sentences. An ambiguous company name is resolved
+  // by the location hint passed with it, not by a larger model.
   ENRICH_MODEL: 'claude-sonnet-5',
 
   POLL_MINUTES: 30,      // how often pollInbox() runs
@@ -73,8 +72,8 @@ var CONFIG = {
   // Enrichment retries once and no more. A triage retry is one cheap round
   // trip; an enrichment retry re-runs the whole tool loop — every search, the
   // fetch, the thinking — so it costs as much as the call it is repeating and
-  // multiplies the wall clock by the attempt count. Four attempts turned a
-  // 90-second call into six minutes, which is the entire execution. A company
+  // multiplies the wall clock by the attempt count: four attempts at a
+  // 90-second call are six minutes, which is the entire execution. A company
   // that fails is left blank and picked up by a later poll; that path already
   // exists and is free.
   ENRICH_MAX_ATTEMPTS: 1,
