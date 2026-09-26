@@ -23,6 +23,39 @@ Daily trigger ────────▶ markStale()   Open + silent 30 days �
 Only `src/` reaches Google. If you use [clasp](https://github.com/google/clasp), point
 `rootDir` at `src`.
 
+## Making it yours
+
+The defaults fit one person's search: a software job hunt from Israel. Someone else
+deploying it should go through these places **before running `setup()`**, editing their
+own pasted copies in the Apps Script editor. Nothing in the repo needs to change.
+
+| Where | What | Why it's personal |
+|---|---|---|
+| `src/appsscript.json` → `timeZone` | e.g. `"America/Los_Angeles"` | Ships as `Asia/Jerusalem`. Also set **File → Settings → Time zone** on the spreadsheet, which separately controls how the date cells display |
+| `src/Config.gs` → `MARKETS` | the categories *your* target employers fall into | The research model must pick one value from this list for every company, so a software list sorts a bank as `Fintech` or `Other` |
+| `src/Config.gs` → `ATS_DOMAINS` | the hiring systems and job boards your field uses | The prefilter drops mail from senders it doesn't recognise. The list leans towards Israeli tech hiring |
+| `src/Config.gs` → `DAILY_BUDGET_USD` | your own ceiling | It's your API key being spent |
+| `src/Config.gs` → `STALE_DAYS`, `BACKFILL_DAYS` | your recruiting pace, and how far back your search began | Hiring in some fields stays quiet longer before anyone would call it ghosting |
+
+**`MARKETS`** — replace the list freely, but keep `'Other'` and `'Unknown'`: an
+unidentifiable company, or a value the model makes up, falls back to `'Unknown'`.
+Change it before `setup()`, because the Market column's dropdown is built from it. If
+you run the local tests, `tools/probe.py` has its own copy of the list and
+`test/run_tests.py` fails until the two match.
+
+**`ATS_DOMAINS`** — you can't know the full list up front. Add the obvious ones for your
+field (finance, for instance, often hires through `avature.net`, `efinancialcareers.com`,
+or `wellfound.com` for startups), then let the first dry run show you the rest: anything
+real in `_Skipped` is a domain or phrase to add (see [First run](#first-run)).
+
+Two things are generic enough to leave alone. `KEYWORD_PATTERNS` matches ordinary
+English application mail in any field. `ENRICH_SYSTEM` in `src/Claude.gs` is worded for
+companies that sell a product, but it copes with a fund or a bank.
+
+**Updates overwrite all of this.** Re-pasting a newer `Config.gs` or `appsscript.json`
+from the repo brings back the defaults above, along with `DRY_RUN = true`. Keep a note
+of your edits and re-apply them after any update.
+
 ## Setup
 
 1. **Create the Sheet.** New Google Sheet → **Extensions → Apps Script**. It must be
@@ -30,7 +63,8 @@ Only `src/` reaches Google. If you use [clasp](https://github.com/google/clasp),
    isn't bound to a Sheet and `setup()` will fail on `getActive()`.
 2. **Add the files.** Create one editor file per `.gs` in `src/` and paste its contents.
    Project Settings → tick *Show `appsscript.json`*, then paste that too (it declares
-   the OAuth scopes). Delete the default `Code.gs` stub. Naming the project something
+   the OAuth scopes). If this isn't your own deployment of the original setup, go through
+   [Making it yours](#making-it-yours) now. Delete the default `Code.gs` stub. Naming the project something
    recognizable is worth it — the authorization dialog uses that name.
 3. **Add your API key.** Project Settings (⚙️) → Script Properties → *Add script
    property*: `ANTHROPIC_API_KEY` = your key from console.anthropic.com → *Save*.
