@@ -285,8 +285,19 @@ function normalizeCompany_(name) {
     .trim();
 }
 
+/**
+ * Role match key. Years and requisition numbers are dropped because the same
+ * posting is named with and without them — Amazon's confirmation says
+ * "Graduate Software Dev Engineer", its tracking email "2026 Graduate Software
+ * Dev Engineer". Short numbers stay: "SDE 2" and "SDE 3" are different jobs.
+ */
 function normalizeRole_(role) {
-  return String(role || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  return String(role || '').toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\b(?:19|20)\d\d\b/g, ' ')  // cohort / posting year
+    .replace(/\b\d{5,}\b/g, ' ')          // requisition id
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 // ---------------------------------------------------------------- companies

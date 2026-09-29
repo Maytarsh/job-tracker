@@ -36,6 +36,12 @@ t('company normalization keeps distinct companies distinct', function () {
 t('role normalization ignores punctuation and case', function () {
   eq(normalizeRole_('Senior Security Researcher'), normalizeRole_('senior  security-researcher'));
 });
+t('role normalization ignores years and requisition ids, not levels', function () {
+  eq(normalizeRole_('2026 Graduate Software Dev Engineer'),
+     normalizeRole_('Graduate Software Dev Engineer'));
+  eq(normalizeRole_('Backend Engineer - 2891234'), normalizeRole_('Backend Engineer'));
+  ok(normalizeRole_('SDE 2') !== normalizeRole_('SDE 3'), 'levels stay distinct');
+});
 
 // ------------------------------------------------------------- prefilter
 t('prefilter accepts a Greenhouse confirmation', function () {
@@ -143,6 +149,18 @@ t('a different role at the same company is a separate application', function () 
   other.role = 'Backend Engineer';
   upsertApplication_(b, other, msgAt(1));
   eq(b.appended.length, 2, 'two roles, two rows');
+});
+
+t('the same role with and without its year is one application', function () {
+  var b = fakeBook();
+  var first = JSON.parse(JSON.stringify(CONFIRM));
+  first.company = 'Amazon';
+  first.role = '2026 Graduate Software Dev Engineer';
+  upsertApplication_(b, first, msgAt(0));
+  var second = JSON.parse(JSON.stringify(first));
+  second.role = 'Graduate Software Dev Engineer';
+  upsertApplication_(b, second, msgAt(0));
+  eq(b.appended.length, 1, 'one row, not two');
 });
 
 t('an interview email advances the stage but keeps it Open', function () {
