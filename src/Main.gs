@@ -226,6 +226,25 @@ function processWindow_(afterEpoch, beforeEpoch, limit) {
   // dead API from burning through the whole window in a few seconds.
   var consecutiveFailures = 0;
 
+  // A transient API failure on this message: count it, hold the cursor before
+  // it, and say whether the run should give up. The message gets no _Processed
+  // row, so the next run retries it.
+  function transientFailure(what, msg, epoch, err) {
+    stats.errors++;
+    consecutiveFailures++;
+    if (!stats.oldestErrorEpoch || epoch < stats.oldestErrorEpoch) {
+      stats.oldestErrorEpoch = epoch;
+    }
+    Logger.log(what + ' failed for ' + msg.id + ': ' + err);
+    if (consecutiveFailures < CONFIG.MAX_CONSECUTIVE_FAILURES) return false;
+    stats.aborted = String(err).substring(0, 200);
+    Logger.log('stopping this run: ' + consecutiveFailures +
+               ' API failures in a row. Nothing is lost — the messages have ' +
+               'no _Processed row, so they are picked up again once the ' +
+               'API works.');
+    return true;
+  }
+
   for (var m = 0; m < messages.length; m++) {
     var msg = messages[m];
 
@@ -259,13 +278,12 @@ function processWindow_(afterEpoch, beforeEpoch, limit) {
       stats.triaged++;
       consecutiveFailures = 0;
     } catch (err) {
-      stats.errors++;
-
       // A response that cannot be parsed will not parse next time either.
       // Holding the cursor for it would stop the backfill dead, so record it
       // and move on — dropped loudly, and counted by the coverage report,
       // rather than retried forever or lost without trace.
       if (err && err.permanent) {
+        stats.errors++;
         stats.unclassified++;
         consecutiveFailures = 0;
         book.processed.push([
@@ -276,20 +294,43 @@ function processWindow_(afterEpoch, beforeEpoch, limit) {
         continue;
       }
 
-      consecutiveFailures++;
-      if (!stats.oldestErrorEpoch || epoch < stats.oldestErrorEpoch) {
-        stats.oldestErrorEpoch = epoch;
-      }
-      Logger.log('triage failed for ' + msg.id + ': ' + err);
-      if (consecutiveFailures >= CONFIG.MAX_CONSECUTIVE_FAILURES) {
-        stats.aborted = String(err).substring(0, 200);
-        Logger.log('stopping this run: ' + consecutiveFailures +
-                   ' API failures in a row. Nothing is lost — the messages have ' +
-                   'no _Processed row, so they are picked up again once the ' +
-                   'API works.');
+      if (transientFailure('triage', msg, epoch, err)) break;
+      continue;  // no _Processed row, so it retries next run
+    }
+
+    // The row is filed under an existing title when the email names the same
+    // job differently. The log keeps the email's own wording.
+    var filed = triage;
+    var titles = (!CONFIG.DRY_RUN && WRITE_CATEGORIES[triage.category])
+      ? otherRoles_(book, triage.company, triage.role)
+      : [];
+    if (titles.length) {
+      // The triage is already paid for, but a second call that cannot finish
+      // would take the whole run with it. Leave this message unrecorded: it is
+      // still inside the window, and the next run takes it from the top.
+      if (!triageBudgetLeft_(book)) {
+        stats.outOfTime = true;
+        Logger.log('out of time before matching the role of ' + msg.id);
         break;
       }
-      continue;  // no _Processed row, so it retries next run
+      var same;
+      try {
+        same = sameJobAs_(triage.company, triage.role, titles);
+      } catch (err) {
+        if (!(err && err.permanent)) {
+          if (transientFailure('role match', msg, epoch, err)) break;
+          continue;
+        }
+        // An unreadable answer will not read better next time. Filing under
+        // the email's own title risks only a visible duplicate.
+        Logger.log('role match unreadable for ' + msg.id + ', filing as "' +
+                   triage.role + '": ' + err.message);
+        same = '';
+      }
+      if (same) {
+        filed = JSON.parse(JSON.stringify(triage));
+        filed.role = same;
+      }
     }
 
     var action;
@@ -297,7 +338,8 @@ function processWindow_(afterEpoch, beforeEpoch, limit) {
       action = DRY_RUN_ACTION;
     } else if (WRITE_CATEGORIES[triage.category]) {
       try {
-        action = upsertApplication_(book, triage, msg);
+        action = upsertApplication_(book, filed, msg);
+        if (filed !== triage) action += ' (as "' + filed.role + '")';
         stats.written++;
       } catch (err) {
         stats.errors++;

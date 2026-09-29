@@ -470,6 +470,36 @@ function findRow_(book, companyKey, role, allowFallback) {
   return allowFallback ? open : null;  // most recent open row, or nothing
 }
 
+/**
+ * The company's other role titles, when the email's role matches none of them
+ * exactly — the case worth asking sameJobAs_ about. Empty when there is an
+ * exact match, when the email names no role, or when there is nothing else to
+ * compare against, so most emails never make the extra call.
+ */
+function otherRoles_(book, company, role) {
+  var companyKey = normalizeCompany_(company);
+  var roleKey = normalizeRole_(role);
+  if (!companyKey || !roleKey) return [];
+
+  var seen = {};
+  var titles = [];
+  var lists = [book.rows, book.appended];
+  for (var l = 0; l < lists.length; l++) {
+    for (var i = 0; i < lists[l].length; i++) {
+      var row = lists[l][i];
+      if (normalizeCompany_(row[A_COMPANY]) !== companyKey) continue;
+      var key = normalizeRole_(row[A_ROLE]);
+      if (!key) continue;
+      if (key === roleKey) return [];
+      if (!seen[key]) {
+        seen[key] = true;
+        titles.push(String(row[A_ROLE]));
+      }
+    }
+  }
+  return titles;
+}
+
 /** Last update as a comparable number, 0 when it is missing or unreadable. */
 function rowUpdatedTime_(row) {
   var value = row[A_UPDATED];

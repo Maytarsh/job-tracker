@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Pre-flight: prove both Claude request shapes work before porting them to Apps Script.
+"""Pre-flight: prove the Claude request shapes work before porting them to Apps Script.
 
-Sends two real requests with ANTHROPIC_API_KEY from the environment:
-  1. Triage   - claude-haiku-4-5 + output_config.format (json_schema)
-  2. Enrich   - claude-sonnet-5 + web_search/web_fetch server tools + strict tool use
+Sends three real requests with ANTHROPIC_API_KEY from the environment:
+  1. Triage     - claude-haiku-4-5 + output_config.format (json_schema)
+  2. Enrich     - claude-sonnet-5 + web_search/web_fetch server tools + strict tool use
+  3. Role match - claude-haiku-4-5 + output_config.format with a per-call enum
 
 Stdlib only, deliberately - do not reach for `requests` here. Two properties depend
 on it: the payloads mirror exactly what UrlFetchApp sends from Apps Script, which has
@@ -14,7 +15,7 @@ with no dependency to install, and worth keeping that way.
 Standalone means every value here restates one in src/, and a restatement rots
 silently: a probe sending a payload production no longer sends proves nothing about
 production. check_probe_drift() in test/run_tests.py fails if any of the mirrors
-below, either schema, or either payload's key set drifts from src/. Change one side,
+below, any schema, or any payload's key set drifts from src/. Change one side,
 change the other.
 """
 import json
@@ -35,6 +36,7 @@ ENRICH_MODEL = "claude-sonnet-5"
 # truncation surfaced as an unterminated-JSON SyntaxError.
 TRIAGE_MAX_TOKENS = 2048
 ENRICH_MAX_TOKENS = 8192
+ROLE_MATCH_MAX_TOKENS = 64
 WEB_SEARCH_TYPE = "web_search_20260209"
 WEB_FETCH_TYPE = "web_fetch_20260209"
 ENRICH_MAX_SEARCHES = 3
@@ -232,6 +234,53 @@ def probe_enrich(company="Wiz", location=""):
     return u
 
 
+def role_match_schema(count):
+    """Mirror of roleMatchSchema_(): the enum is the numbering of the listed titles."""
+    return {
+        "type": "object",
+        "properties": {"match": {"type": "string",
+                                 "enum": ["none"] + [str(i) for i in range(1, count + 1)]}},
+        "required": ["match"],
+        "additionalProperties": False,
+    }
+
+
+def probe_role_match():
+    print("\n" + "=" * 70)
+    print("PROBE 3 — role match: " + TRIAGE_MODEL + " + output_config.format (per-call enum)")
+    print("=" * 70)
+    titles = ["Data Engineer", "Graduate Software Dev Engineer"]
+    res = call({
+        "model": TRIAGE_MODEL,
+        "max_tokens": ROLE_MATCH_MAX_TOKENS,
+        "system": (
+            "You decide whether the job title from an email names the same position as "
+            "one of the titles already tracked for that company. A year, cohort, "
+            "requisition number or suffix does not make it a different position; a "
+            "different seniority, level or discipline does. Answer with the number of "
+            "the matching title, or \"none\". When unsure, answer \"none\"."
+        ),
+        "messages": [{
+            "role": "user",
+            "content": (
+                "<company>\nAmazon\n</company>\n"
+                "<email_title>\n2026 Graduate Software Dev Engineer\n</email_title>\n"
+                "<tracked_titles>\n"
+                + "\n".join(f"{i + 1}. {t}" for i, t in enumerate(titles))
+                + "\n</tracked_titles>"
+            ),
+        }],
+        "output_config": {"format": {"type": "json_schema",
+                                     "schema": role_match_schema(len(titles))}},
+    })
+    text = next(b["text"] for b in res["content"] if b["type"] == "text")
+    answer = json.loads(text)["match"]
+    print(f"answer: {answer!r}  (expected '2')")
+    u = res["usage"]
+    print(f"usage: in={u['input_tokens']} out={u['output_tokens']}")
+    return u
+
+
 if __name__ == "__main__":
     if not KEY:
         sys.exit("ANTHROPIC_API_KEY is not set")
@@ -242,6 +291,7 @@ if __name__ == "__main__":
         sys.argv[1] if len(sys.argv) > 1 else "Wiz",
         sys.argv[2] if len(sys.argv) > 2 else "",
     )
+    r = probe_role_match()
     if t and e:
         tri = price(TRIAGE_MODEL, t)
         # web_search bills per search on top of tokens. Omitting it under-reported
@@ -251,4 +301,5 @@ if __name__ == "__main__":
         print("\n" + "=" * 70)
         print(f"cost/email   (triage) : ${tri:.5f}")
         print(f"cost/company (enrich) : ${enr:.5f}  ({searches} search(es))")
+        print(f"cost/role match       : ${price(TRIAGE_MODEL, r):.5f}")
         print(f"est. 150 emails + 40 companies: ${tri * 150 + enr * 40:.2f}")

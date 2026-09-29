@@ -124,7 +124,7 @@ def _probe_constants(raw_src):
 
 
 def check_probe_drift():
-    """tools/probe.py restates the two request payloads so it can run standalone
+    """tools/probe.py restates the request payloads so it can run standalone
     and stdlib-only. Everything it restates is compared here. A probe that sends
     what production no longer sends proves nothing about production - and the
     drift is invisible, because both files keep working on their own.
@@ -243,12 +243,14 @@ def check_probe_drift():
     gs_calls = {
         'triage': _between(gs, 'function triageMessage_', 'if (res.stop_reason'),
         'enrich': _between(gs, 'function enrichCompany_', 'function firstOfType_'),
+        'role match': _between(gs, 'function sameJobAs_', 'if (res.stop_reason'),
     }
     py_calls = {
         'triage': _between(py_src, 'def probe_triage(', 'def probe_enrich('),
-        'enrich': py_src[py_src.index('def probe_enrich('):],
+        'enrich': _between(py_src, 'def probe_enrich(', 'def role_match_schema('),
+        'role match': _between(py_src, 'def probe_role_match(', 'if __name__'),
     }
-    for which in ('triage', 'enrich'):
+    for which in ('triage', 'enrich', 'role match'):
         compare(f'{which} payload keys',
                 set(re.findall(r'^    (\w+):', gs_calls[which], re.M)),
                 set(re.findall(r'^        "(\w+)":', py_calls[which], re.M)))
@@ -259,6 +261,25 @@ def check_probe_drift():
     compare('enrich max_tokens',
             int(re.search(r'max_tokens: (\d+)', gs_calls['enrich']).group(1)),
             probe.get('ENRICH_MAX_TOKENS'))
+    compare('role match max_tokens',
+            int(re.search(r'max_tokens: (\d+)', gs_calls['role match']).group(1)),
+            probe.get('ROLE_MATCH_MAX_TOKENS'))
+
+    # The role match schema is built per call, so the probe mirrors the
+    # function rather than a literal: its fields, required list, strictness,
+    # and the 'none' option that the numbering is appended to.
+    gs_rm = _between(gs, 'function roleMatchSchema_', '/**')
+    py_rm = _between(py_src, 'def role_match_schema(', 'def probe_role_match(')
+    compare('role match schema fields',
+            set(re.findall(r'properties: \{ (\w+):', gs_rm)),
+            set(re.findall(r'"properties": \{"(\w+)":', py_rm)))
+    compare('role match required', gs_required(gs_rm),
+            set(re.findall(r'"([^"]*)"', _between(py_rm, '"required": [', ']'))))
+    compare('role match additionalProperties',
+            'additionalProperties: false' in gs_rm,
+            '"additionalProperties": False' in py_rm)
+    compare('role match options start with none',
+            "var options = ['none'];" in gs_rm, '["none"] +' in py_rm)
 
     gs_types = re.findall(r"type: '(web_\w+?_\d{8})'", gs_calls['enrich'])
     compare('server tool types', gs_types,

@@ -145,6 +145,77 @@ t('a different role at the same company is a separate application', function () 
   eq(b.appended.length, 2, 'two roles, two rows');
 });
 
+// ------------------------------------------------------------ role matching
+// Amazon named one application "Graduate Software Dev Engineer" in its
+// confirmation and "2026 Graduate Software Dev Engineer" in its tracking email,
+// and exact matching made two rows of it. Titles that differ are put to the
+// model; these are the rules for when that call is made at all.
+function amazonRow(role) {
+  var row = new Array(APP_HEADERS.length).fill('');
+  row[A_COMPANY] = 'Amazon';
+  row[A_ROLE] = role;
+  row[A_STATUS] = 'Open';
+  return row;
+}
+
+t('a differently written role is offered the company\'s existing titles', function () {
+  var b = fakeBook();
+  b.rows.push(amazonRow('Graduate Software Dev Engineer'));
+  b.appended.push(amazonRow('Data Engineer'));
+  b.rows.push(amazonRow('graduate software dev engineer'));  // same key, listed once
+  var other = amazonRow('Backend Engineer');
+  other[A_COMPANY] = 'Wiz';
+  b.rows.push(other);
+  eq(JSON.stringify(otherRoles_(b, 'Amazon', '2026 Graduate Software Dev Engineer')),
+     JSON.stringify(['Graduate Software Dev Engineer', 'Data Engineer']));
+});
+
+t('no role match is asked for when it cannot change anything', function () {
+  var b = fakeBook();
+  b.rows.push(amazonRow('Graduate Software Dev Engineer'));
+  b.rows.push(amazonRow(''));
+  eq(otherRoles_(b, 'Amazon', 'Graduate Software Dev Engineer').length, 0, 'exact match');
+  eq(otherRoles_(b, 'Amazon', '').length, 0, 'email names no role');
+  eq(otherRoles_(b, 'Wiz', 'Backend Engineer').length, 0, 'company has no rows');
+});
+
+function runRoleMatch_(answerText, titles) {
+  var original = callAnthropic_;
+  var seen = null;
+  callAnthropic_ = function (payload) {
+    seen = payload;
+    return { content: [{ type: 'text', text: answerText }], stop_reason: 'end_turn' };
+  };
+  try {
+    var result = sameJobAs_('Amazon', '2026 Graduate <b>Engineer', titles);
+  } finally { callAnthropic_ = original; }
+  return { result: result, payload: seen };
+}
+
+t('a role match resolves to the existing title it names', function () {
+  var run = runRoleMatch_('{"match":"2"}', ['Data Engineer', 'Graduate Engineer']);
+  eq(run.result, 'Graduate Engineer');
+  eq(JSON.stringify(run.payload.output_config.format.schema.properties.match.enum),
+     JSON.stringify(['none', '1', '2']), 'the answer can only be a listed title');
+});
+
+t('a role match of none, or out of range, files the email as its own role', function () {
+  eq(runRoleMatch_('{"match":"none"}', ['Data Engineer']).result, '');
+  eq(runRoleMatch_('{"match":"7"}', ['Data Engineer']).result, '');
+});
+
+t('the email\'s role is fenced in the role match prompt', function () {
+  var prompt = runRoleMatch_('{"match":"none"}', ['Data Engineer']).payload.messages[0].content;
+  ok(prompt.indexOf('<b>') === -1, 'angle brackets stripped');
+  ok(prompt.indexOf('<email_title>') !== -1, 'the role sits between markers');
+});
+
+t('an unreadable role match is permanent, not retried forever', function () {
+  var threw = null;
+  try { runRoleMatch_('not json', ['Data Engineer']); } catch (err) { threw = err; }
+  ok(threw && threw.permanent, 'marked permanent so the email is filed, not held');
+});
+
 t('an interview email advances the stage but keeps it Open', function () {
   var b = fakeBook();
   upsertApplication_(b, CONFIRM, msgAt(0));
